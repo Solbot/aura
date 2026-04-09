@@ -71,7 +71,31 @@ SQLite = structured config, notes, reminders. Vector DB = semantic/associative m
 
 ---
 
+## UI Design
+
+- Tile-based touch interface inspired by Windows Phone/Win8 concept
+- Live glanceable tiles: connection status, AURA state, notes, reminders, battery
+- Touch to expand tiles for detail
+- Ambient animation when AURA is listening/thinking/speaking
+- Kivy (Python) leading candidate — options still open
+- Fullscreen, no traditional desktop chrome
+
+---
+
+## Notes & Storage
+
+| Component | Decision |
+|---|---|
+| Notes/Reminders | SQLite database |
+| Mud maps | Image files with SQLite reference |
+| Voice notes | Dictated, transcribed, stored |
+| Location | Manual job context ("Hey AURA, new job — Johnson Street") |
+
+---
+
 ## Config System
+
+Single SQLite table — key/value with description and editable flag. Managed by db.py.
 
 | Key | Default | Editable | Notes |
 |---|---|---|---|
@@ -196,6 +220,17 @@ Default tools: Notes, Reminders, Mud map sketch, Weather (connected), Web search
 | ~/models/piper/ | Piper TTS voice models |
 | ~/models/ | LLM models |
 | ~/llama.cpp/ | llama.cpp installation |
+| ~/aura/systemd/ | systemd service files |
+
+---
+
+## Systemd Services
+
+| Service | File | Function |
+|---|---|---|
+| llama-server | systemd/llama-server.service | Starts inference engine on boot |
+
+Install: sudo cp ~/aura/systemd/*.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable <service>
 
 ---
 
@@ -218,13 +253,14 @@ Default tools: Notes, Reminders, Mud map sketch, Weather (connected), Web search
 - [x] PCIe Gen 3 configured and verified
 - [x] llama.cpp compiled with Cortex-A76 optimisations
 - [x] Llama 3.1 8B Q4_K_M downloaded
-- [x] llama-server running on port 8080
+- [x] llama-server running as systemd service, starts on boot
 - [x] Basic Python conversation loop working
 - [x] Python venv created at ~/aura/venv/
 - [x] Piper TTS installed and working (en_US-amy-medium)
 - [x] Smooth audio playback — full buffer, raw PCM to aplay
-- [x] Git repository initialised and pushed to GitHub
-- [ ] db.py config system
+- [x] Git repository live at github.com/Solbot/aura
+- [x] db.py config system initialised
+- [ ] Wire db.py into aura.py
 - [ ] System prompt template
 - [ ] First boot detection and conversation
 - [ ] Hot/Warm/Cold memory system
