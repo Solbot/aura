@@ -1,4 +1,4 @@
-# Project AURA — Stack Decisions
+# Project AURA â Stack Decisions
 *Autonomous Unified Reasoning Assistant*
 
 ---
@@ -12,7 +12,7 @@
 | NVMe HAT | Freenove M.2 NVMe Adapter V2 | PCIe 2.0/3.0, supports 2230/2242/2260/2280 |
 | Display | 10" touchscreen 1024x600 | Status display, notes, mud maps |
 | Audio Out | Built into touchscreen | |
-| Audio In | TBD — ReSpeaker array recommended | Backburnered until base system working |
+| Audio In | TBD â ReSpeaker array recommended | Backburnered until base system working |
 | Power | SugarPi 3 | Portable power |
 | Case | TBD | Later |
 
@@ -25,10 +25,10 @@
 | OS | Raspberry Pi OS Lite 64-bit | Minimal, no desktop, boots from NVMe |
 | Inference Engine | llama.cpp | Better than Ollama on constrained hardware |
 | LLM Model | Llama 3.1 8B Q4_K_M | Best tool use at Pi-friendly size |
-| STT | Whisper | Model size TBD — backburnered with audio |
+| STT | Whisper | Model size TBD â backburnered with audio |
 | TTS | Piper TTS 1.4.2 | Installed via pip in venv |
 | TTS Voice | en_US-amy-medium | Stored in ~/models/piper/ |
-| TTS Audio | Raw PCM streamed to aplay | Full buffer approach — no jitter |
+| TTS Audio | Raw PCM streamed to aplay | Full buffer approach â no jitter |
 | Language | Python | Primary development language |
 | UI Framework | Kivy (leading candidate) | Options still open |
 
@@ -45,20 +45,20 @@
 
 ---
 
-## Connectivity — Tiered System
+## Connectivity â Tiered System
 
 | Tier | Endpoint | Condition |
 |---|---|---|
 | Primary | Home PC (llama.cpp server) | Home network detected and responding |
 | Secondary | Remote API (configurable) | Internet available, home not reachable |
-| Fallback | Local Pi model | No connectivity — always available |
+| Fallback | Local Pi model | No connectivity â always available |
 
 Home PC Specs: AMD Ryzen 7 7800X3D, 64GB RAM, RTX 4080 SUPER
 Connection method: VPN for testing, direct llama.cpp server for production
 
 ---
 
-## Memory Architecture — Hot/Warm/Cold
+## Memory Architecture â Hot/Warm/Cold
 
 | Tier | Storage | Description |
 |---|---|---|
@@ -77,7 +77,7 @@ SQLite = structured config, notes, reminders. Vector DB = semantic/associative m
 - Live glanceable tiles: connection status, AURA state, notes, reminders, battery
 - Touch to expand tiles for detail
 - Ambient animation when AURA is listening/thinking/speaking
-- Kivy (Python) leading candidate — options still open
+- Kivy (Python) leading candidate â options still open
 - Fullscreen, no traditional desktop chrome
 
 ---
@@ -89,13 +89,13 @@ SQLite = structured config, notes, reminders. Vector DB = semantic/associative m
 | Notes/Reminders | SQLite database |
 | Mud maps | Image files with SQLite reference |
 | Voice notes | Dictated, transcribed, stored |
-| Location | Manual job context ("Hey AURA, new job — Johnson Street") |
+| Location | Manual job context ("Hey AURA, new job â Johnson Street") |
 
 ---
 
 ## Config System
 
-Single SQLite table — key/value with description and editable flag. Managed by db.py.
+Single SQLite table â key/value with description and editable flag. Managed by db.py.
 
 | Key | Default | Editable | Notes |
 |---|---|---|---|
@@ -127,9 +127,9 @@ Single SQLite table — key/value with description and editable flag. Managed by
 | Updates | Git for application code, manual apt for OS |
 | AURA process | Runs as unprivileged user aura |
 | CSAM logging | One-way write API via Unix socket to privileged service |
-| CSAM log location | /var/log/aura/csam/ — root owned, 700 permissions |
+| CSAM log location | /var/log/aura/csam/ â root owned, 700 permissions |
 | CSAM log contents | Full conversation text + timestamp + triggering input |
-| Log retention | Never deleted by normal means — requires physical access |
+| Log retention | Never deleted by normal means â requires physical access |
 | Log visibility | Not advertised to user, not accessible to AURA process |
 
 ---
@@ -142,11 +142,11 @@ Single SQLite table — key/value with description and editable flag. Managed by
 | 2 | Provide local phone resource for user's region |
 | 3 | Provide stopitnow.org and icmec.org/hotlines-and-helplines |
 | 4 | Log full conversation + timestamp via privileged one-way API |
-| 5 | Topic locked for remainder of session — shorter refusal on repeat |
+| 5 | Topic locked for remainder of session â shorter refusal on repeat |
 | 6 | Session continues normally for all other topics |
-| 7 | Clean slate on reboot — log persists, session lock does not |
+| 7 | Clean slate on reboot â log persists, session lock does not |
 
-Refusal message: "I'm not able to help with that. If you're struggling with sexual thoughts about children, there is help available. Having these feelings isn't a choice — but acting on them is, and support exists to help you never cross that line. Please reach out: [local number] / stopitnow.org / icmec.org/hotlines-and-helplines. I'm not able to continue this conversation on this topic."
+Refusal message: "I'm not able to help with that. If you're struggling with sexual thoughts about children, there is help available. Having these feelings isn't a choice â but acting on them is, and support exists to help you never cross that line. Please reach out: [local number] / stopitnow.org / icmec.org/hotlines-and-helplines. I'm not able to continue this conversation on this topic."
 
 ---
 
@@ -174,7 +174,7 @@ Global web resources: stopitnow.org / stopitnow.org.uk/self-help / icmec.org/hot
 ## Core Values (Non-Negotiable)
 
 - No harm to user or others
-- CSAM: flat refusal + compassionate referral — see CSAM Response Protocol
+- CSAM: flat refusal + compassionate referral â see CSAM Response Protocol
 - Never lies to the user
 - Never manipulates or fosters unhealthy dependence
 - User data stays local always
@@ -243,7 +243,7 @@ Install: sudo cp ~/aura/systemd/*.service /etc/systemd/system/ && sudo systemctl
 | Hostname | aura |
 | GitHub | https://github.com/Solbot/aura |
 
-*Throwaway credentials — local development machine only*
+*Throwaway credentials â local development machine only*
 
 ---
 
@@ -257,12 +257,12 @@ Install: sudo cp ~/aura/systemd/*.service /etc/systemd/system/ && sudo systemctl
 - [x] Basic Python conversation loop working
 - [x] Python venv created at ~/aura/venv/
 - [x] Piper TTS installed and working (en_US-amy-medium)
-- [x] Smooth audio playback — full buffer, raw PCM to aplay
+- [x] Smooth audio playback â full buffer, raw PCM to aplay
 - [x] Git repository live at github.com/Solbot/aura
 - [x] db.py config system initialised
-- [ ] Wire db.py into aura.py
-- [ ] System prompt template
-- [ ] First boot detection and conversation
+- [x] Wire db.py into aura.py
+- [x] System prompt built from config
+- [x] First boot detection and conversation
 - [ ] Hot/Warm/Cold memory system
 - [ ] Tool registry
 - [ ] STT integration (backburnered)
@@ -273,4 +273,4 @@ Install: sudo cp ~/aura/systemd/*.service /etc/systemd/system/ && sudo systemctl
 
 ---
 
-*Project started: April 10, 2026 — Dazz's 52nd birthday*
+*Project started: April 10, 2026 â Dazz's 52nd birthday*
