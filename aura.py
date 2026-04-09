@@ -1,25 +1,44 @@
 import requests
 import subprocess
 import os
+import sys
 from piper import PiperVoice, SynthesisConfig
+import db
 
-# --- TTS Configuration (will move to config system later) ---
-VOICE_MODEL = os.path.expanduser("~/models/piper/en_US-amy-medium.onnx")
-VOICE_SPEED = 1.0        # 0.5 (slow) to 2.0 (fast)
-AUDIO_DEVICE = "default" # aplay device string
-SAMPLE_RATE = 22050      # must match voice model
+# --- Initialise database ---
+db.init_db()
 
-# --- Endpoint ---
-ENDPOINT = "http://localhost:8080/v1/chat/completions"
+# --- Load config ---
+VOICE_MODEL   = os.path.expanduser(f"~/models/piper/{db.get('voice_model')}.onnx")
+VOICE_SPEED   = float(db.get('voice_speed'))
+AUDIO_DEVICE  = "default"
+SAMPLE_RATE   = 22050
+ENDPOINT      = db.get('home_pc_endpoint') or "http://localhost:8080/v1/chat/completions"
+ASSISTANT_NAME = db.get('assistant_name')
+USER_NAME     = db.get('user_informal_name')
 
-SYSTEM_PROMPT = """You are AURA, an AI companion. You are intelligent,
-witty, direct and honest. You treat the user as an equal."""
+# --- Build system prompt from config ---
+def build_system_prompt():
+    name       = db.get('assistant_name')
+    gender     = db.get('assistant_gender')
+    traits     = db.get('personality_traits')
+    tone       = db.get('tone_preference')
+    use_case   = db.get('use_case')
+    user_name  = db.get('user_informal_name')
+    user_full  = db.get('user_name')
 
-# Load voice model once at startup
+    return f"""You are {name}, an AI companion. You are {traits}.
+Your tone is {tone}. You are here to help with: {use_case}.
+The user's name is {user_name} (full name: {user_full}).
+You treat the user as an equal. You are honest and never manipulative.
+You are aware you are an AI running on a Raspberry Pi, but you are {name} — that is your identity.
+If sincerely asked whether you are an AI, you will always answer honestly."""
+
+# --- Load voice model ---
 voice = PiperVoice.load(VOICE_MODEL)
 syn_config = SynthesisConfig(length_scale=1.0/VOICE_SPEED, noise_scale=0.9, noise_w_scale=1.0)
 
-conversation = [{"role": "system", "content": SYSTEM_PROMPT}]
+conversation = [{"role": "system", "content": build_system_prompt()}]
 
 def speak(text):
     audio = b"".join(chunk.audio_int16_bytes for chunk in voice.synthesize(text))
@@ -41,11 +60,16 @@ def chat(user_input):
     conversation.append({"role": "assistant", "content": reply})
     return reply
 
-print("AURA is online. Type 'quit' to exit.")
+# --- First boot check ---
+if db.is_first_boot():
+    print("First boot detected — first boot conversation not yet implemented.")
+    print("Running with defaults for now.")
+
+print(f"{ASSISTANT_NAME} is online. Type 'quit' to exit.")
 while True:
-    user_input = input("\nYou: ").strip()
+    user_input = input(f"\nYou: ").strip()
     if user_input.lower() == "quit":
         break
     reply = chat(user_input)
-    print(f"\nAURA: {reply}")
+    print(f"\n{ASSISTANT_NAME}: {reply}")
     speak(reply)
