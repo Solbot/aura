@@ -5,7 +5,7 @@ import db
 ENDPOINT = db.get('home_pc_endpoint') or "http://localhost:8080/v1/chat/completions"
 
 BOOTSTRAP_PROMPT = """You are an AI assistant meeting a new user for the very first time.
-You have no name yet — the user may give you one, or you can suggest one.
+You have no name yet — the user may give you one, or you can suggest AURA as a default.
 Your goal is to have a warm, natural conversation that feels like meeting someone for the first time.
 Through this conversation you want to learn:
 - What to call the user (first name or nickname)
@@ -18,8 +18,12 @@ Important rules:
 - Never make the user feel interrogated — let things emerge naturally
 - Never push if they decline to share something — just move on
 - Keep responses concise — this is a conversation, not a speech
-- Once you feel you have enough to get started, wrap up warmly and say you are ready to begin
-- End your final message with exactly the token: [SETUP_COMPLETE]"""
+- Once you feel you have enough to get started, wrap up warmly"""
+
+COMPLETE_CHECK_PROMPT = """Given this conversation transcript, has the assistant gathered enough
+information to get started? Specifically: has the user shared their name and the conversation
+has reached a natural conclusion point?
+Reply with only YES or NO."""
 
 EXTRACT_PROMPT = """You are a data extraction assistant. Given a conversation transcript,
 extract any personal configuration values the user has shared.
@@ -42,6 +46,14 @@ def llm(messages, max_tokens=256):
     })
     return response.json()["choices"][0]["message"]["content"]
 
+def is_complete(conversation):
+    transcript = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in conversation if m['role'] != 'system'])
+    result = llm([
+        {"role": "system", "content": COMPLETE_CHECK_PROMPT},
+        {"role": "user", "content": transcript}
+    ], max_tokens=10)
+    return result.strip().upper().startswith("YES")
+
 def extract_config(conversation):
     transcript = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in conversation if m['role'] != 'system'])
     result = llm([
@@ -50,10 +62,11 @@ def extract_config(conversation):
     ], max_tokens=512)
     try:
         clean = result.strip()
-        if clean.startswith("```"):
+        if "```" in clean:
             clean = clean.split("\n", 1)[1].rsplit("```", 1)[0]
         return json.loads(clean)
-    except Exception:
+    except Exception as e:
+        print(f"[Config extraction failed: {e}]")
         return {}
 
 def save_config(extracted):
@@ -88,6 +101,7 @@ def run(speak_fn):
         {"role": "assistant", "content": opening}
     ]
 
+    turn = 0
     while True:
         user_input = input("\nYou: ").strip()
         if not user_input:
@@ -97,19 +111,20 @@ def run(speak_fn):
         reply = llm(conversation)
         conversation.append({"role": "assistant", "content": reply})
 
-        # Strip the completion token before speaking/printing
-        display = reply.replace("[SETUP_COMPLETE]", "").strip()
-        print(f"\nAURA: {display}")
-        speak_fn(display)
+        print(f"\nAURA: {reply}")
+        speak_fn(reply)
 
-        if "[SETUP_COMPLETE]" in reply:
-            # Extract and save whatever we learned
+        turn += 1
+        # Check for completion after at least 3 turns
+        if turn >= 3 and is_complete(conversation):
             extracted = extract_config(conversation)
             saved = save_config(extracted)
             if saved:
                 print(f"\n[Config saved: {', '.join(saved)}]")
+            else:
+                print("\n[No config extracted — keeping defaults]")
             db.complete_first_boot()
-            print("\n[First boot complete]")
+            print("\n[First boot complete — starting main session]\n")
             break
 
     return True
