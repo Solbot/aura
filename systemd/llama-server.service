@@ -1,0 +1,16 @@
+[Unit]
+Description=llama.cpp inference server for AURA
+After=network.target
+
+[Service]
+Type=simple
+User=aura
+WorkingDirectory=/home/aura/llama.cpp
+ExecStart=/home/aura/llama.cpp/build/bin/llama-server -m /home/aura/models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf -c 2048 --host 0.0.0.0 --port 8080
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
