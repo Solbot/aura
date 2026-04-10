@@ -7,6 +7,7 @@ import csam
 import tools
 import first_boot
 import awareness
+import dream
 import threading
 from piper import PiperVoice, SynthesisConfig
 
@@ -48,17 +49,17 @@ awareness.start()
 
 # --- Build system prompt ---
 def build_system_prompt():
-    # Load and deduplicate profile facts — most recent value per key
+    # Load profile — prefer dream-consolidated facts over raw conversation facts
     facts = db.profile_get_all()
-    seen = {}
-    for f in facts:
-        seen[f['key']] = f['value']
+    dream_facts = {f['key']: f['value'] for f in facts if f['source'] == 'dream'}
+    all_facts   = {f['key']: f['value'] for f in facts}
+    merged = {**all_facts, **dream_facts}  # dream takes priority
 
     profile_str = ""
-    if seen:
+    if merged:
         profile_str = (
             "\n\nWHAT YOU ALREADY KNOW ABOUT THE USER:\n" +
-            "\n".join([f"- {k}: {v}" for k, v in seen.items()]) +
+            "\n".join([f"- {k}: {v}" for k, v in merged.items()]) +
             "\nUse this information naturally. Do not announce that you looked it up."
         )
 
@@ -78,14 +79,7 @@ def build_system_prompt():
         "- You have NO external weather sensors. Never invent weather data.\n"
         "- When the user shares personal facts (birthday, family, job, preferences, "
         "important dates, hobbies): IMMEDIATELY call store_user_fact.\n"
-        "- DATE STORAGE: Always store dates in 'Month DD YYYY' format when the year is known, "
-        "or 'Month DD' when only the day/month is known. Never store relative words.\n"
-        "- DATE INFERENCE: When you can calculate a year from duration information, do so. "
-        "Examples: 'anniversary is April 23, married 21 years' -> store 'April 23 2005'. "
-        "'born in 1974, birthday April 10' -> store 'April 10 1974'. "
-        "Always call get_system_info for today's date first when you need to calculate years.\n"
-        "- UPDATING FACTS: If you learn new information that completes or corrects an existing "
-        "stored fact, call store_user_fact again with the complete updated value.\n"
+        "- Pass values exactly as the user says them — the system will clean and normalise them.\n"
         "- Use get_user_facts when asked to recall something about the user.\n"
         "- Present tool results as exact values naturally in conversation."
     )
@@ -204,6 +198,13 @@ def chat(user_input, hot_memory_note=None):
     conversation.append({"role": "assistant", "content": reply})
     return reply
 
+def shutdown():
+    """Clean shutdown — run dream cycle then stop awareness thread."""
+    awareness.stop()
+    print("\n[Aether is dreaming... consolidating memories]")
+    dream.dream(ENDPOINT)
+    print("[Done]")
+
 print(f"\n{ASSISTANT_NAME} is online. Type 'quit' to exit.")
 while True:
     immediate = awareness.get_immediate_message()
@@ -216,7 +217,7 @@ while True:
 
     user_input = input(f"\nYou: ").strip()
     if user_input.lower() == "quit":
-        awareness.stop()
+        shutdown()
         break
 
     hot_note = awareness.get_hot_memory_note()
