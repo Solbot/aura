@@ -107,8 +107,7 @@ def profile_set(key, value, source="conversation", confidence="high"):
     import re
     from datetime import datetime
     with get_connection() as conn:
-        # Check if a more complete value already exists for this key
-        # A value with a 4-digit year is more complete than one without
+        # Check completeness — a value with a 4-digit year is more complete
         existing = conn.execute("""
             SELECT value FROM user_profile WHERE key = ?
             ORDER BY learned_at DESC LIMIT 1
@@ -117,8 +116,11 @@ def profile_set(key, value, source="conversation", confidence="high"):
             existing_val = existing[0]
             existing_has_year = bool(re.search(r'\d{4}', existing_val))
             new_has_year = bool(re.search(r'\d{4}', str(value)))
-            # If existing already has year and new value doesn't, skip
+            # Skip if existing is already complete and new value is less complete
             if existing_has_year and not new_has_year:
+                return
+            # Skip if values are identical
+            if existing_val.strip().lower() == str(value).strip().lower():
                 return
         conn.execute("""
             INSERT INTO user_profile (key, value, learned_at, source, confidence)
