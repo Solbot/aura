@@ -20,6 +20,12 @@ hot_memory_queue = queue.Queue()
 _stop_event = threading.Event()
 _last_date  = None
 _dream_running = False
+_aether_busy   = False  # Set True while Aether is processing a message
+
+def set_busy(busy):
+    """Called by aura.py to signal when LLM is active."""
+    global _aether_busy
+    _aether_busy = busy
 
 def _is_quiet_hours():
     try:
@@ -44,7 +50,7 @@ def _check_temperature():
         if temp >= threshold:
             immediate_queue.put({
                 "type":    IMMEDIATE,
-                "message": f"Warning — I'm running hot. My CPU temperature is {temp}°C. "
+                "message": f"Warning â I'm running hot. My CPU temperature is {temp}Â°C. "
                            f"You may want to check my cooling.",
                 "source":  "thermal"
             })
@@ -95,16 +101,19 @@ def _check_date_events():
                 else:
                     hot_memory_queue.put({
                         "type":    QUEUED,
-                        "message": f"Note: Today is a significant date — {key}: {value}",
+                        "message": f"Note: Today is a significant date â {key}: {value}",
                         "source":  "profile_date"
                     })
     except Exception:
         pass
 
 def _check_dream():
-    """Trigger dream cycle if pending and silence threshold reached."""
+    """Trigger dream cycle only when Aether is idle and silence threshold reached."""
     global _dream_running
     if _dream_running:
+        return
+    # Don't dream while Aether is actively processing a message
+    if _aether_busy:
         return
     try:
         if db.should_dream():
