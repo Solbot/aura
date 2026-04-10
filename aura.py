@@ -9,6 +9,7 @@ import first_boot
 import awareness
 import memory
 import commands
+import aura_socket
 from piper import PiperVoice, SynthesisConfig
 
 # --- Initialise database and tools ---
@@ -47,6 +48,9 @@ if db.is_first_boot():
 # --- Start background awareness thread ---
 awareness.start()
 
+# --- Start IPC socket server ---
+aura_socket.start()
+
 # --- Build system prompt ---
 def build_system_prompt():
     facts = db.profile_get_all()
@@ -78,7 +82,7 @@ def build_system_prompt():
         "- You have NO external weather sensors. Never invent weather data.\n"
         "- When the user shares personal facts (birthday, family, job, preferences, "
         "important dates, hobbies): IMMEDIATELY call store_user_fact.\n"
-        "- Pass values exactly as the user says them Ã¢ÂÂ the system will clean and normalise them.\n"
+        "- Pass values exactly as the user says them ÃÂ¢ÃÂÃÂ the system will clean and normalise them.\n"
         "- Use get_user_facts when asked to recall something about the user.\n"
         "- Present tool results as exact values naturally in conversation."
     )
@@ -171,7 +175,7 @@ def chat(user_input, hot_memory_note=None):
             message   = data2["choices"][0]["message"]
             reply     = message.get("content") or ""
 
-            # Remove the tool instruction from hot Ã¢ÂÂ it was scaffolding
+            # Remove the tool instruction from hot ÃÂ¢ÃÂÃÂ it was scaffolding
             hot = memory.get_hot()
             if hot and hot[-1].get("content") == instruction:
                 hot.pop()
@@ -211,9 +215,25 @@ while True:
         memory.add_message("assistant", msg)
         continue
 
+    # Check for incoming socket messages (non-blocking)
+    socket_msg = aura_socket.get_incoming(block=False)
+    if socket_msg:
+        msg_type = socket_msg.get("type")
+        if msg_type == "chat_input":
+            user_input = socket_msg.get("text", "").strip()
+            msg_id     = socket_msg.get("id")
+            if user_input:
+                db.touch_interaction()
+                hot_note = awareness.get_hot_memory_note()
+                reply    = chat(user_input, hot_memory_note=hot_note)
+                if reply:
+                    aura_socket.send_chat_response(reply, msg_id)
+        continue
+
     user_input = input(f"\nYou: ").strip()
     if user_input.lower() == "quit":
         awareness.stop()
+        aura_socket.stop()
         break
 
     # Check for debug commands first
