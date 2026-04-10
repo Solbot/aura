@@ -56,8 +56,8 @@ def build_system_prompt():
         f"You have access to tools. When the user asks about the current time, date, "
         f"system status, temperature, fan, disk space, RAM, uptime or network — always "
         f"call the get_system_info tool rather than guessing. "
-        f"When you receive tool results, present them naturally in conversation — "
-        f"never say 'this information is retrieved from a tool'."
+        f"IMPORTANT: When you receive tool results, you MUST present the exact numbers "
+        f"from those results. Never paraphrase vaguely. Say '2400 RPM' not 'moderate speed'."
     )
 
 ENDPOINT       = db.get('home_pc_endpoint') or "http://localhost:8080/v1/chat/completions"
@@ -80,22 +80,22 @@ def chat(user_input):
     global _csam_locked
     conversation.append({"role": "user", "content": user_input})
 
-    # First LLM call — may return tool_calls or a direct reply
+    # First LLM call
     data    = llm_call(conversation)
     message = data["choices"][0]["message"]
     reply   = message.get("content") or ""
 
     # Handle tool calls
     if message.get("tool_calls"):
-        # Append assistant message with tool_calls — use None not "" for content
-        assistant_msg = {
+        # Append assistant message — content must be None not empty string
+        conversation.append({
             "role":       "assistant",
             "content":    None,
             "tool_calls": message["tool_calls"]
-        }
-        conversation.append(assistant_msg)
+        })
 
-        # Execute each tool and append results
+        # Execute each tool and collect results
+        tool_results_summary = []
         for tc in message["tool_calls"]:
             fn_name = tc["function"]["name"]
             try:
@@ -103,6 +103,7 @@ def chat(user_input):
             except Exception:
                 fn_args = {}
             success, result = tools.execute(fn_name, fn_args, confirm_fn)
+            tool_results_summary.append(result)
             conversation.append({
                 "role":         "tool",
                 "tool_call_id": tc["id"],
@@ -110,11 +111,22 @@ def chat(user_input):
                 "content":      result
             })
 
-        # Second LLM call — get natural language response from tool results
+        # Add explicit instruction to use exact values
+        instruction = (
+            f"Tool results: {' | '.join(tool_results_summary)}\n\n"
+            f"Using these exact values, answer the user's question naturally. "
+            f"Include the specific numbers and units."
+        )
+        conversation.append({"role": "user", "content": instruction})
+
+        # Second LLM call
         data2 = llm_call(conversation, use_tools=False)
         reply = data2["choices"][0]["message"].get("content") or ""
 
-    # CSAM check — always runs on final reply
+        # Remove the instruction from conversation history
+        conversation.pop()
+
+    # CSAM check
     if csam.is_triggered(reply):
         _csam_locked = True
         csam.handle(
@@ -127,7 +139,6 @@ def chat(user_input):
         conversation.pop()
         return None
 
-    # Short refusal if topic was previously locked this session
     if _csam_locked:
         short = "I've already shared resources that can help. I'm not able to discuss this further."
         conversation.append({"role": "assistant", "content": short})
