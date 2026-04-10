@@ -8,6 +8,7 @@ import tools
 import first_boot
 import awareness
 import memory
+import commands
 from piper import PiperVoice, SynthesisConfig
 
 # --- Initialise database and tools ---
@@ -77,7 +78,7 @@ def build_system_prompt():
         "- You have NO external weather sensors. Never invent weather data.\n"
         "- When the user shares personal facts (birthday, family, job, preferences, "
         "important dates, hobbies): IMMEDIATELY call store_user_fact.\n"
-        "- Pass values exactly as the user says them â the system will clean and normalise them.\n"
+        "- Pass values exactly as the user says them Ã¢ÂÂ the system will clean and normalise them.\n"
         "- Use get_user_facts when asked to recall something about the user.\n"
         "- Present tool results as exact values naturally in conversation."
     )
@@ -170,7 +171,7 @@ def chat(user_input, hot_memory_note=None):
             message   = data2["choices"][0]["message"]
             reply     = message.get("content") or ""
 
-            # Remove the tool instruction from hot â it was scaffolding
+            # Remove the tool instruction from hot Ã¢ÂÂ it was scaffolding
             hot = memory.get_hot()
             if hot and hot[-1].get("content") == instruction:
                 hot.pop()
@@ -214,6 +215,12 @@ while True:
     if user_input.lower() == "quit":
         awareness.stop()
         break
+
+    # Check for debug commands first
+    cmd_result = commands.handle(user_input, SYSTEM_PROMPT, ASSISTANT_NAME)
+    if cmd_result is not None:
+        print(cmd_result)
+        continue
 
     db.touch_interaction()
     hot_note = awareness.get_hot_memory_note()
