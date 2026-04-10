@@ -26,7 +26,7 @@ Your job is to:
 
 Return ONLY a valid JSON object where keys are canonical fact names and values are clean strings.
 Dates must be in "Month DD YYYY" format where year is known, or "Month DD" where only day/month known.
-Return only the JSON object â no explanation, no markdown."""
+Return only the JSON object Ã¢ÂÂ no explanation, no markdown."""
 
 def dream(endpoint=None):
     """
@@ -86,19 +86,22 @@ def dream(endpoint=None):
 
         consolidated = json.loads(result)
 
-        # Write consolidated facts back â tagged as source="dream"
+        # Write consolidated facts back Ã¢ÂÂ tagged as source="dream"
         for key, value in consolidated.items():
             if key and value:
                 db.profile_set(key, str(value), source="dream", confidence="high")
 
-        print(f"[Dream complete: consolidated {len(consolidated)} facts]")
+        print(f"\r[Dream: consolidated {len(consolidated)} facts]")
+        print("\nYou: ", end="", flush=True)
         return consolidated
 
     except json.JSONDecodeError as e:
-        print(f"[Dream: failed to parse response: {e}]")
+        print(f"\r[Dream: parse error]")
+        print("\nYou: ", end="", flush=True)
         return None
     except Exception as e:
-        print(f"[Dream: error: {e}]")
+        print(f"\r[Dream: error]")
+        print("\nYou: ", end="", flush=True)
         return None
 
 if __name__ == "__main__":
