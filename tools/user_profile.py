@@ -1,5 +1,5 @@
 # tools/user_profile.py
-# User profile tool Ã¢ÂÂ stores and retrieves facts Aether learns about the user.
+# User profile tool ÃÂ¢ÃÂÃÂ stores and retrieves facts Aether learns about the user.
 # Facts are persisted in SQLite with timestamps and confidence levels.
 
 import tools
@@ -23,7 +23,7 @@ Store dates in "Month DD" format e.g. "April 10", "December 25".
 
 Return ONLY a valid JSON array of objects, each with:
 - key: short snake_case label (e.g. "birthday", "wife_name", "job_title")
-- value: the fact value â always use absolute dates, never relative ones
+- value: the fact value Ã¢ÂÂ always use absolute dates, never relative ones
 - confidence: "high" if stated directly, "inferred" if calculated or implied
 
 If no new facts are found, return an empty array [].
@@ -72,11 +72,35 @@ def _resolve_date(value):
     return value  # Already absolute, return unchanged
 
 def store_fact(key, value, confidence="high", source="conversation"):
-    """Store a fact about the user. Automatically resolves relative dates."""
-    # For date-related keys, always resolve relative references
+    """Store a fact about the user. Resolves relative dates and merges birthday fields."""
+    import re
+
+    # Resolve relative date references for date-related keys
     date_keys = ["birthday", "anniversary", "date", "born", "due"]
     if any(dk in key.lower() for dk in date_keys):
         value = _resolve_date(value)
+
+    # Smart birthday merging:
+    # If storing birth_year and a birthday already exists, merge them
+    if key.lower() == "birth_year":
+        existing = db.profile_get("birthday")
+        if existing:
+            bday = existing["value"]
+            # Only merge if birthday doesn't already have a year
+            if not re.search(r'\d{4}', bday):
+                merged = f"{bday} {value}"
+                db.profile_set("birthday", merged, source=source, confidence=confidence)
+                return f"Updated birthday to: {merged}"
+        # Store birth_year standalone if no birthday to merge with
+        db.profile_set(key, value, source=source, confidence=confidence)
+        return f"Stored: {key} = {value}"
+
+    # If storing birthday and birth_year already exists, merge them
+    if key.lower() == "birthday":
+        existing_year = db.profile_get("birth_year")
+        if existing_year and not re.search(r'\d{4}', value):
+            value = f"{value} {existing_year['value']}"
+
     db.profile_set(key, value, source=source, confidence=confidence)
     return f"Stored: {key} = {value}"
 
@@ -127,7 +151,7 @@ def get_relevant_facts(topic):
     facts = db.profile_get_all()
     if not facts:
         return "No profile information available."
-    # Simple keyword matching Ã¢ÂÂ good enough for now
+    # Simple keyword matching ÃÂ¢ÃÂÃÂ good enough for now
     topic_lower = topic.lower()
     relevant = [f for f in facts if
                 topic_lower in f['key'].lower() or
@@ -136,7 +160,7 @@ def get_relevant_facts(topic):
         return "\n".join([f"{f['key']}: {f['value']}" for f in relevant])
     return "No specific information found for that topic."
 
-# Self-register Ã¢ÂÂ two tools: read and write
+# Self-register ÃÂ¢ÃÂÃÂ two tools: read and write
 tools.register(
     name        = "store_user_fact",
     description = (
