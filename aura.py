@@ -48,6 +48,20 @@ awareness.start()
 
 # --- Build system prompt ---
 def build_system_prompt():
+    # Load and deduplicate profile facts — most recent value per key
+    facts = db.profile_get_all()
+    seen = {}
+    for f in facts:
+        seen[f['key']] = f['value']
+
+    profile_str = ""
+    if seen:
+        profile_str = (
+            "\n\nWHAT YOU ALREADY KNOW ABOUT THE USER:\n" +
+            "\n".join([f"- {k}: {v}" for k, v in seen.items()]) +
+            "\nUse this information naturally. Do not announce that you looked it up."
+        )
+
     return (
         csam.get_core_prompt() + "\n\n" +
         f"You are {db.get('assistant_name')}, an AI companion. "
@@ -57,18 +71,17 @@ def build_system_prompt():
         f"The user's name is {db.get('user_informal_name')} (full name: {db.get('user_name')}). "
         f"You treat the user as an equal. You are honest and never manipulative. "
         f"You are aware you are an AI running on a Raspberry Pi. "
-        f"If sincerely asked whether you are an AI, always answer honestly.\n\n"
-
-        f"TOOL USAGE RULES:\n"
-        f"- For time/date/temperature/sensors: always call get_system_info â never guess.\n"
-        f"- You have NO external weather or environmental sensors. Never invent weather data.\n"
-        f"- When the user shares personal facts worth remembering (birthday, family, job, "
-        f"preferences, important dates, hobbies): IMMEDIATELY call store_user_fact.\n"
-        f"- For dates: ALWAYS call get_system_info first to get today's absolute date, "
-        f"then store the resolved absolute date. Never store relative words like 'today' "
-        f"or 'tomorrow' â always convert to 'Month DD' format e.g. 'April 10'.\n"
-        f"- Use get_user_facts when you need to recall something about the user.\n"
-        f"- When you receive tool results, present the exact values naturally in conversation."
+        f"If sincerely asked whether you are an AI, always answer honestly." +
+        profile_str +
+        "\n\nTOOL USAGE RULES:\n"
+        "- For time/date/temperature/sensors: always call get_system_info. Never guess.\n"
+        "- You have NO external weather sensors. Never invent weather data.\n"
+        "- When the user shares personal facts (birthday, family, job, preferences, "
+        "important dates, hobbies): IMMEDIATELY call store_user_fact.\n"
+        "- For dates: call get_system_info first to get today's absolute date, "
+        "then store in 'Month DD' format e.g. 'April 10'. Never store 'today' or 'tomorrow'.\n"
+        "- Use get_user_facts when asked to recall something about the user.\n"
+        "- Present tool results as exact values naturally in conversation."
     )
 
 ENDPOINT       = db.get('home_pc_endpoint') or "http://localhost:8080/v1/chat/completions"
@@ -85,28 +98,30 @@ def llm_call(messages, use_tools=True):
         payload["tools"]       = tools.get_definitions()
         payload["tool_choice"] = "auto"
     try:
-        r = requests.post(ENDPOINT, json=payload, timeout=120)
+        r    = requests.post(ENDPOINT, json=payload, timeout=120)
         data = r.json()
         if "choices" not in data:
-            # Log the unexpected response and return a safe fallback
-            print(f"[LLM error: unexpected response: {str(data)[:200]}]")
-            return {"choices": [{"message": {"content": "I had trouble processing that. Could you try again?", "tool_calls": None}}]}
+            print(f"[LLM error: {str(data)[:200]}]")
+            return {"choices": [{"message": {
+                "content": "I had trouble processing that. Could you try again?",
+                "tool_calls": None
+            }}]}
         return data
     except Exception as e:
         print(f"[LLM error: {e}]")
-        return {"choices": [{"message": {"content": "I'm having trouble connecting right now.", "tool_calls": None}}]}
+        return {"choices": [{"message": {
+            "content": "I'm having trouble connecting right now.",
+            "tool_calls": None
+        }}]}
 
 def process_tool_calls(message):
-    """Execute all tool calls in a message, return results summary."""
     if not message.get("tool_calls"):
         return None
-
     conversation.append({
         "role":       "assistant",
         "content":    None,
         "tool_calls": message["tool_calls"]
     })
-
     tool_results_summary = []
     for tc in message["tool_calls"]:
         fn_name = tc["function"]["name"]
@@ -130,12 +145,12 @@ def chat(user_input, hot_memory_note=None):
     if hot_memory_note:
         conversation.append({
             "role":    "system",
-            "content": f"[Background awareness â act on this naturally if relevant]: {hot_memory_note}"
+            "content": f"[Background awareness — act on this naturally if relevant]: {hot_memory_note}"
         })
 
     conversation.append({"role": "user", "content": user_input})
 
-    # LLM call loop â handles chained tool calls (e.g. get date then store fact)
+    # LLM loop — handles chained tool calls
     max_iterations = 5
     reply = ""
     for _ in range(max_iterations):
@@ -144,23 +159,21 @@ def chat(user_input, hot_memory_note=None):
         reply   = message.get("content") or ""
 
         if not message.get("tool_calls"):
-            break  # No more tool calls â we have the final reply
+            break
 
         results = process_tool_calls(message)
-
-        # Ask LLM to continue with tool results
         instruction = (
             f"Tool results: {' | '.join(results)}\n\n"
             f"Continue naturally using these exact values."
         )
         conversation.append({"role": "user", "content": instruction})
-        data2  = llm_call(conversation, use_tools=True)  # Allow further tool calls
+        data2   = llm_call(conversation, use_tools=True)
         message = data2["choices"][0]["message"]
         reply   = message.get("content") or ""
-        conversation.pop()  # Remove instruction
+        conversation.pop()
 
         if not message.get("tool_calls"):
-            break  # Final reply reached
+            break
 
     # CSAM check
     if csam.is_triggered(reply):
@@ -187,7 +200,6 @@ def chat(user_input, hot_memory_note=None):
 
 print(f"\n{ASSISTANT_NAME} is online. Type 'quit' to exit.")
 while True:
-    # Check for immediate messages before waiting for input
     immediate = awareness.get_immediate_message()
     if immediate:
         msg = immediate["message"]
