@@ -77,7 +77,7 @@ def build_system_prompt():
         "- You have NO external weather sensors. Never invent weather data.\n"
         "- When the user shares personal facts (birthday, family, job, preferences, "
         "important dates, hobbies): IMMEDIATELY call store_user_fact.\n"
-        "- Pass values exactly as the user says them — the system will clean and normalise them.\n"
+        "- Pass values exactly as the user says them â the system will clean and normalise them.\n"
         "- Use get_user_facts when asked to recall something about the user.\n"
         "- Present tool results as exact values naturally in conversation."
     )
@@ -121,60 +121,65 @@ def chat(user_input, hot_memory_note=None):
 
     memory.add_message("user", user_input)
 
+    awareness.set_busy(True)
     reply = ""
-    for _ in range(5):
-        # Get full context including warm summaries
-        messages = memory.get_context(SYSTEM_PROMPT)
-        data     = llm_call(messages, use_tools=True)
-        message  = data["choices"][0]["message"]
-        reply    = message.get("content") or ""
+    try:
+        for _ in range(5):
+            # Get full context including warm summaries
+            messages = memory.get_context(SYSTEM_PROMPT)
+            data     = llm_call(messages, use_tools=True)
+            message  = data["choices"][0]["message"]
+            reply    = message.get("content") or ""
 
-        if not message.get("tool_calls"):
-            break
+            if not message.get("tool_calls"):
+                break
 
-        # Store the assistant tool-call message directly in hot memory
-        # (must preserve exact structure llama.cpp expects)
-        memory.get_hot().append({
-            "role":       "assistant",
-            "content":    None,
-            "tool_calls": message["tool_calls"]
-        })
-
-        # Execute tools and add results
-        tool_results = []
-        for tc in message["tool_calls"]:
-            fn_name = tc["function"]["name"]
-            try:
-                fn_args = json.loads(tc["function"]["arguments"])
-            except Exception:
-                fn_args = {}
-            success, result = tools.execute(fn_name, fn_args, confirm_fn)
-            tool_results.append(result)
+            # Store the assistant tool-call message directly in hot memory
+            # (must preserve exact structure llama.cpp expects)
             memory.get_hot().append({
-                "role":         "tool",
-                "tool_call_id": tc["id"],
-                "name":         fn_name,
-                "content":      result
+                "role":       "assistant",
+                "content":    None,
+                "tool_calls": message["tool_calls"]
             })
 
-        # Inject tool results as a user message for the follow-up call
-        instruction = (
-            f"Tool results: {' | '.join(tool_results)}\n\n"
-            f"Continue naturally using these exact values."
-        )
-        memory.add_message("user", instruction)
-        messages2 = memory.get_context(SYSTEM_PROMPT)
-        data2     = llm_call(messages2, use_tools=False)
-        message   = data2["choices"][0]["message"]
-        reply     = message.get("content") or ""
+            # Execute tools and add results
+            tool_results = []
+            for tc in message["tool_calls"]:
+                fn_name = tc["function"]["name"]
+                try:
+                    fn_args = json.loads(tc["function"]["arguments"])
+                except Exception:
+                    fn_args = {}
+                success, result = tools.execute(fn_name, fn_args, confirm_fn)
+                tool_results.append(result)
+                memory.get_hot().append({
+                    "role":         "tool",
+                    "tool_call_id": tc["id"],
+                    "name":         fn_name,
+                    "content":      result
+                })
 
-        # Remove the tool instruction from hot — it was scaffolding
-        hot = memory.get_hot()
-        if hot and hot[-1].get("content") == instruction:
-            hot.pop()
+            # Inject tool results as a user message for the follow-up call
+            instruction = (
+                f"Tool results: {' | '.join(tool_results)}\n\n"
+                f"Continue naturally using these exact values."
+            )
+            memory.add_message("user", instruction)
+            messages2 = memory.get_context(SYSTEM_PROMPT)
+            data2     = llm_call(messages2, use_tools=False)
+            message   = data2["choices"][0]["message"]
+            reply     = message.get("content") or ""
 
-        if not message.get("tool_calls"):
-            break
+            # Remove the tool instruction from hot â it was scaffolding
+            hot = memory.get_hot()
+            if hot and hot[-1].get("content") == instruction:
+                hot.pop()
+
+            if not message.get("tool_calls"):
+                break
+
+    finally:
+        awareness.set_busy(False)
 
     # CSAM check
     if csam.is_triggered(reply):
@@ -193,6 +198,7 @@ def chat(user_input, hot_memory_note=None):
 
     memory.add_message("assistant", reply)
     return reply
+
 
 print(f"\n{ASSISTANT_NAME} is online. Type 'quit' to exit.")
 while True:
