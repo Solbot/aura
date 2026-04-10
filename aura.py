@@ -49,7 +49,7 @@ awareness.start()
 
 # --- Build system prompt ---
 def build_system_prompt():
-    # Load profile — prefer dream-consolidated facts over raw conversation facts
+    # Load profile â prefer dream-consolidated facts over raw conversation facts
     facts = db.profile_get_all()
     dream_facts = {f['key']: f['value'] for f in facts if f['source'] == 'dream'}
     all_facts   = {f['key']: f['value'] for f in facts}
@@ -79,7 +79,7 @@ def build_system_prompt():
         "- You have NO external weather sensors. Never invent weather data.\n"
         "- When the user shares personal facts (birthday, family, job, preferences, "
         "important dates, hobbies): IMMEDIATELY call store_user_fact.\n"
-        "- Pass values exactly as the user says them — the system will clean and normalise them.\n"
+        "- Pass values exactly as the user says them â the system will clean and normalise them.\n"
         "- Use get_user_facts when asked to recall something about the user.\n"
         "- Present tool results as exact values naturally in conversation."
     )
@@ -145,12 +145,12 @@ def chat(user_input, hot_memory_note=None):
     if hot_memory_note:
         conversation.append({
             "role":    "system",
-            "content": f"[Background awareness — act on this naturally if relevant]: {hot_memory_note}"
+            "content": f"[Background awareness â act on this naturally if relevant]: {hot_memory_note}"
         })
 
     conversation.append({"role": "user", "content": user_input})
 
-    # LLM loop — handles chained tool calls
+    # LLM loop â handles chained tool calls
     max_iterations = 5
     reply = ""
     for _ in range(max_iterations):
@@ -199,7 +199,7 @@ def chat(user_input, hot_memory_note=None):
     return reply
 
 def shutdown():
-    """Clean shutdown — run dream cycle then stop awareness thread."""
+    """Clean shutdown â run dream cycle then stop awareness thread."""
     awareness.stop()
     print("\n[Aether is dreaming... consolidating memories]")
     dream.dream(ENDPOINT)
@@ -220,6 +220,7 @@ while True:
         shutdown()
         break
 
+    db.touch_interaction()
     hot_note = awareness.get_hot_memory_note()
     reply    = chat(user_input, hot_memory_note=hot_note)
     if reply:
