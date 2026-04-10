@@ -1,5 +1,5 @@
 # tools/user_profile.py
-# User profile tool — stores and retrieves facts Aether learns about the user.
+# User profile tool â stores and retrieves facts Aether learns about the user.
 # Facts are persisted in SQLite with timestamps and confidence levels.
 
 import tools
@@ -15,12 +15,15 @@ extract any personal facts about the user that would be useful to remember long-
 Focus on: name, birthday, family members, job, location, preferences, important dates,
 hobbies, health, and any other personal details shared.
 
-For dates mentioned relatively (e.g. "next Friday", "last Tuesday"), calculate the
-absolute date using today's date which will be provided.
+CRITICAL DATE RULE: Never store relative date words like "today", "tomorrow", "next Friday".
+Always resolve relative dates to absolute dates using the current date provided.
+For example: if today is April 10 and user says "today is my birthday", store "April 10".
+If user says "my birthday is next Friday" and today is April 6, store "April 10".
+Store dates in "Month DD" format e.g. "April 10", "December 25".
 
 Return ONLY a valid JSON array of objects, each with:
 - key: short snake_case label (e.g. "birthday", "wife_name", "job_title")
-- value: the fact value (e.g. "April 10", "Joanne", "Security Installer")
+- value: the fact value — always use absolute dates, never relative ones
 - confidence: "high" if stated directly, "inferred" if calculated or implied
 
 If no new facts are found, return an empty array [].
@@ -85,7 +88,7 @@ def get_relevant_facts(topic):
     facts = db.profile_get_all()
     if not facts:
         return "No profile information available."
-    # Simple keyword matching — good enough for now
+    # Simple keyword matching â good enough for now
     topic_lower = topic.lower()
     relevant = [f for f in facts if
                 topic_lower in f['key'].lower() or
@@ -94,7 +97,7 @@ def get_relevant_facts(topic):
         return "\n".join([f"{f['key']}: {f['value']}" for f in relevant])
     return "No specific information found for that topic."
 
-# Self-register — two tools: read and write
+# Self-register â two tools: read and write
 tools.register(
     name        = "store_user_fact",
     description = (
