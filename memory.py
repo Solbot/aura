@@ -1,15 +1,15 @@
 # memory.py
 # Three-tier memory system for Aether.
 #
-# HOT   — Last N messages in RAM (the LLM's context window)
-# WARM  — SQLite summaries of pruned conversation chunks
-# COLD  — Append-only raw archive of every message ever sent
+# HOT   â Last N messages in RAM (the LLM's context window)
+# WARM  â SQLite summaries of pruned conversation chunks
+# COLD  â Append-only raw archive of every message ever sent
 #
 # Flow:
-#   User speaks → add_message() → stored in hot + cold
-#   Hot exceeds HOT_MAX → oldest chunk summarised → written to warm → dropped from hot
-#   On startup → warm summaries injected between system prompt and recent messages
-#   Dream cycle → consolidates warm + profile facts into clean profile
+#   User speaks â add_message() â stored in hot + cold
+#   Hot exceeds HOT_MAX â oldest chunk summarised â written to warm â dropped from hot
+#   On startup â warm summaries injected between system prompt and recent messages
+#   Dream cycle â consolidates warm + profile facts into clean profile
 
 import db
 import requests
@@ -26,7 +26,7 @@ produce a concise factual summary of what was discussed. Focus on:
 - Decisions or plans made
 - Anything Aether committed to remembering
 
-Write in third person. Be brief — 3-6 sentences maximum.
+Write in third person. Be brief â 3-6 sentences maximum.
 Return only the summary, no preamble."""
 
 def _get_endpoint():
@@ -46,7 +46,8 @@ def _llm_summarise(messages_text):
         if "choices" in data:
             return data["choices"][0]["message"]["content"].strip()
     except Exception as e:
-        print(f"[Memory: summarise error: {e}]")
+        print(f"\r[Memory: summarise error]")
+        print("\nYou: ", end="", flush=True)
     return None
 
 # --- In-memory hot tier ---
@@ -114,7 +115,7 @@ def get_context(system_prompt):
             "content": f"[Earlier in our conversation: {combined}]"
         })
 
-    # Add hot messages (skip any system messages — already have system prompt)
+    # Add hot messages (skip any system messages â already have system prompt)
     messages.extend([m for m in _hot if m["role"] != "system"])
     return messages
 
