@@ -26,7 +26,7 @@ Your job is to:
 
 Return ONLY a valid JSON object where keys are canonical fact names and values are clean strings.
 Dates must be in "Month DD YYYY" format where year is known, or "Month DD" where only day/month known.
-Return only the JSON object — no explanation, no markdown."""
+Return only the JSON object â no explanation, no markdown."""
 
 def dream(endpoint=None):
     """
@@ -70,7 +70,7 @@ def dream(endpoint=None):
                 {"role": "user",   "content": prompt}
             ],
             "max_tokens": 512
-        }, timeout=60)
+        }, timeout=120)
 
         data = response.json()
         if "choices" not in data:
@@ -86,7 +86,7 @@ def dream(endpoint=None):
 
         consolidated = json.loads(result)
 
-        # Write consolidated facts back — tagged as source="dream"
+        # Write consolidated facts back â tagged as source="dream"
         for key, value in consolidated.items():
             if key and value:
                 db.profile_set(key, str(value), source="dream", confidence="high")
