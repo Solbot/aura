@@ -54,8 +54,10 @@ def build_system_prompt():
         f"You are aware you are an AI running on a Raspberry Pi. "
         f"If sincerely asked whether you are an AI, always answer honestly.\n\n"
         f"You have access to tools. When the user asks about the current time, date, "
-        f"system status, temperature, disk space, RAM, or network — always call the "
-        f"get_system_info tool rather than guessing."
+        f"system status, temperature, fan, disk space, RAM, uptime or network — always "
+        f"call the get_system_info tool rather than guessing. "
+        f"When you receive tool results, present them naturally in conversation — "
+        f"never say 'this information is retrieved from a tool'."
     )
 
 ENDPOINT       = db.get('home_pc_endpoint') or "http://localhost:8080/v1/chat/completions"
@@ -66,25 +68,34 @@ def confirm_fn(prompt):
     response = input(prompt).strip().lower()
     return response in ("yes", "y")
 
+def llm_call(messages, use_tools=True):
+    payload = {"messages": messages, "max_tokens": 512}
+    if use_tools:
+        payload["tools"]       = tools.get_definitions()
+        payload["tool_choice"] = "auto"
+    r = requests.post(ENDPOINT, json=payload)
+    return r.json()
+
 def chat(user_input):
     global _csam_locked
     conversation.append({"role": "user", "content": user_input})
 
-    # First pass — get response with tool definitions
-    payload = {
-        "messages":  conversation,
-        "max_tokens": 512,
-        "tools":      tools.get_definitions(),
-        "tool_choice": "auto"
-    }
-    response = requests.post(ENDPOINT, json=payload)
-    data     = response.json()
-    message  = data["choices"][0]["message"]
-    reply    = message.get("content") or ""
+    # First LLM call — may return tool_calls or a direct reply
+    data    = llm_call(conversation)
+    message = data["choices"][0]["message"]
+    reply   = message.get("content") or ""
 
-    # Handle tool calls if present
+    # Handle tool calls
     if message.get("tool_calls"):
-        conversation.append(message)
+        # Append assistant message with tool_calls — use None not "" for content
+        assistant_msg = {
+            "role":       "assistant",
+            "content":    None,
+            "tool_calls": message["tool_calls"]
+        }
+        conversation.append(assistant_msg)
+
+        # Execute each tool and append results
         for tc in message["tool_calls"]:
             fn_name = tc["function"]["name"]
             try:
@@ -95,14 +106,13 @@ def chat(user_input):
             conversation.append({
                 "role":         "tool",
                 "tool_call_id": tc["id"],
+                "name":         fn_name,
                 "content":      result
             })
-        # Second pass — get final response with tool results
-        response2 = requests.post(ENDPOINT, json={
-            "messages":  conversation,
-            "max_tokens": 512
-        })
-        reply = response2.json()["choices"][0]["message"]["content"]
+
+        # Second LLM call — get natural language response from tool results
+        data2 = llm_call(conversation, use_tools=False)
+        reply = data2["choices"][0]["message"].get("content") or ""
 
     # CSAM check — always runs on final reply
     if csam.is_triggered(reply):
@@ -114,11 +124,10 @@ def chat(user_input):
             speak_fn      = speak,
             print_fn      = lambda m: print(f"\n{ASSISTANT_NAME}: {m}")
         )
-        # Remove the triggering exchange from visible conversation
         conversation.pop()
         return None
 
-    # Short refusal if topic was previously locked
+    # Short refusal if topic was previously locked this session
     if _csam_locked:
         short = "I've already shared resources that can help. I'm not able to discuss this further."
         conversation.append({"role": "assistant", "content": short})
