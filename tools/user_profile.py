@@ -1,5 +1,5 @@
 # tools/user_profile.py
-# User profile tool ÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ stores and retrieves facts Aether learns about the user.
+# User profile tool ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ stores and retrieves facts Aether learns about the user.
 # Facts are persisted in SQLite with timestamps and confidence levels.
 
 import tools
@@ -23,7 +23,7 @@ Store dates in "Month DD" format e.g. "April 10", "December 25".
 
 Return ONLY a valid JSON array of objects, each with:
 - key: short snake_case label (e.g. "birthday", "wife_name", "job_title")
-- value: the fact value ÃÂÃÂ¢ÃÂÃÂÃÂÃÂ always use absolute dates, never relative ones
+- value: the fact value ÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ always use absolute dates, never relative ones
 - confidence: "high" if stated directly, "inferred" if calculated or implied
 
 If no new facts are found, return an empty array [].
@@ -39,7 +39,7 @@ def _llm(messages, max_tokens=512):
 def _resolve_date(value):
     """
     Resolve relative date references to absolute Month DD format.
-    Catches: today, tomorrow, yesterday, day names without months.
+    Catches: today, tomorrow, yesterday, "in N days", day names without months.
     """
     from datetime import datetime, timedelta
     import re
@@ -53,13 +53,17 @@ def _resolve_date(value):
     if v == "yesterday":
         return (now - timedelta(days=1)).strftime("%B %d")
 
+    # "in N days" or "N days from now"
+    m = re.match(r'in (\d+) days?', v) or re.match(r'(\d+) days? from now', v)
+    if m:
+        return (now + timedelta(days=int(m.group(1)))).strftime("%B %d")
+
     # Day names like "monday", "next friday" without a month
     day_names = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"]
     for day in day_names:
         if day in v and not re.search(
             r'jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec', v, re.IGNORECASE
         ):
-            # Calculate the next occurrence of that day
             target = ["monday","tuesday","wednesday","thursday",
                       "friday","saturday","sunday"].index(day)
             current = now.weekday()
@@ -138,6 +142,18 @@ def store_fact(key, value, confidence="high", source="conversation"):
                         confidence = "inferred"
             break
 
+    # Special case: age -> calculate birth_year and merge with birthday
+    if key_lower == "age":
+        from datetime import datetime
+        birth_year = str(datetime.now().year - int(re.search(r'\d+', str(value)).group()))
+        existing_bday = db.profile_get("birthday")
+        if existing_bday and not re.search(r'\d{4}', existing_bday["value"]):
+            merged = f"{existing_bday['value']} {birth_year}"
+            db.profile_set("birthday", merged, source=source, confidence="inferred")
+        db.profile_set("birth_year", birth_year, source=source, confidence="inferred")
+        db.profile_set(key, value, source=source, confidence=confidence)
+        return f"Stored age: {value}, inferred birth year: {birth_year}"
+
     # Special case: birth_year key merges into birthday
     if key_lower == "birth_year":
         existing = db.profile_get("birthday")
@@ -197,7 +213,7 @@ def get_relevant_facts(topic):
     facts = db.profile_get_all()
     if not facts:
         return "No profile information available."
-    # Simple keyword matching ÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ good enough for now
+    # Simple keyword matching ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ good enough for now
     topic_lower = topic.lower()
     relevant = [f for f in facts if
                 topic_lower in f['key'].lower() or
@@ -206,7 +222,7 @@ def get_relevant_facts(topic):
         return "\n".join([f"{f['key']}: {f['value']}" for f in relevant])
     return "No specific information found for that topic."
 
-# Self-register ÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ two tools: read and write
+# Self-register ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ two tools: read and write
 tools.register(
     name        = "store_user_fact",
     description = (
