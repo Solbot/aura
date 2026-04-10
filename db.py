@@ -104,24 +104,8 @@ def complete_first_boot():
 # --- User profile ---
 
 def profile_set(key, value, source="conversation", confidence="high"):
-    import re
     from datetime import datetime
     with get_connection() as conn:
-        # Check completeness — a value with a 4-digit year is more complete
-        existing = conn.execute("""
-            SELECT value FROM user_profile WHERE key = ?
-            ORDER BY learned_at DESC LIMIT 1
-        """, (key,)).fetchone()
-        if existing:
-            existing_val = existing[0]
-            existing_has_year = bool(re.search(r'\d{4}', existing_val))
-            new_has_year = bool(re.search(r'\d{4}', str(value)))
-            # Skip if existing is already complete and new value is less complete
-            if existing_has_year and not new_has_year:
-                return
-            # Skip if values are identical
-            if existing_val.strip().lower() == str(value).strip().lower():
-                return
         conn.execute("""
             INSERT INTO user_profile (key, value, learned_at, source, confidence)
             VALUES (?, ?, ?, ?, ?)
