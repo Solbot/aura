@@ -1,5 +1,5 @@
 # tools/user_profile.py
-# User profile tool ÃÂ¢ÃÂÃÂ stores and retrieves facts Aether learns about the user.
+# User profile tool ÃÂÃÂ¢ÃÂÃÂÃÂÃÂ stores and retrieves facts Aether learns about the user.
 # Facts are persisted in SQLite with timestamps and confidence levels.
 
 import tools
@@ -23,7 +23,7 @@ Store dates in "Month DD" format e.g. "April 10", "December 25".
 
 Return ONLY a valid JSON array of objects, each with:
 - key: short snake_case label (e.g. "birthday", "wife_name", "job_title")
-- value: the fact value Ã¢ÂÂ always use absolute dates, never relative ones
+- value: the fact value ÃÂ¢ÃÂÃÂ always use absolute dates, never relative ones
 - confidence: "high" if stated directly, "inferred" if calculated or implied
 
 If no new facts are found, return an empty array [].
@@ -71,35 +71,77 @@ def _resolve_date(value):
 
     return value  # Already absolute, return unchanged
 
+# Duration key -> date key mappings for automatic year inference
+_DURATION_TO_DATE = {
+    "birth_year":       "birthday",
+    "years_married":    "wedding_anniversary",
+    "married_years":    "wedding_anniversary",
+    "years_together":   "anniversary",
+    "years_at_job":     "job_start",
+    "years_employed":   "job_start",
+    "years_in_home":    "moved_in",
+}
+
+def _infer_year_from_duration(years_str):
+    """Calculate event year from duration: current_year - years_ago."""
+    from datetime import datetime
+    import re
+    match = re.search(r'\d+', str(years_str))
+    if match:
+        years = int(match.group())
+        return str(datetime.now().year - years)
+    return None
+
 def store_fact(key, value, confidence="high", source="conversation"):
-    """Store a fact about the user. Resolves relative dates and merges birthday fields."""
+    """Store a fact about the user. Resolves dates, merges duration+date pairs."""
     import re
 
     # Resolve relative date references for date-related keys
-    date_keys = ["birthday", "anniversary", "date", "born", "due"]
+    date_keys = ["birthday", "anniversary", "date", "born", "due", "start", "moved"]
     if any(dk in key.lower() for dk in date_keys):
         value = _resolve_date(value)
 
-    # Smart birthday merging:
-    # If storing birth_year and a birthday already exists, merge them
-    if key.lower() == "birth_year":
-        existing = db.profile_get("birthday")
-        if existing:
-            bday = existing["value"]
-            # Only merge if birthday doesn't already have a year
-            if not re.search(r'\d{4}', bday):
-                merged = f"{bday} {value}"
-                db.profile_set("birthday", merged, source=source, confidence=confidence)
-                return f"Updated birthday to: {merged}"
-        # Store birth_year standalone if no birthday to merge with
+    # --- Duration key handling ---
+    # If this is a duration key (e.g. years_married), try to merge with corresponding date
+    key_lower = key.lower()
+    if key_lower in _DURATION_TO_DATE:
+        date_key = _DURATION_TO_DATE[key_lower]
+        existing_date = db.profile_get(date_key)
+        if existing_date:
+            date_val = existing_date["value"]
+            # Only merge if the date doesn't already have a year
+            if not re.search(r'\d{4}', date_val):
+                year = _infer_year_from_duration(value)
+                if year:
+                    merged = f"{date_val} {year}"
+                    db.profile_set(date_key, merged, source=source, confidence="inferred")
+                    db.profile_set(key, value, source=source, confidence=confidence)
+                    return f"Updated {date_key} to: {merged}"
         db.profile_set(key, value, source=source, confidence=confidence)
         return f"Stored: {key} = {value}"
 
-    # If storing birthday and birth_year already exists, merge them
-    if key.lower() == "birthday":
-        existing_year = db.profile_get("birth_year")
-        if existing_year and not re.search(r'\d{4}', value):
-            value = f"{value} {existing_year['value']}"
+    # --- Date key handling ---
+    # If storing a date key, check if a corresponding duration key exists to infer year
+    for dur_key, date_key in _DURATION_TO_DATE.items():
+        if key_lower == date_key:
+            # Check if we already have a year
+            if not re.search(r'\d{4}', value):
+                existing_dur = db.profile_get(dur_key)
+                if existing_dur:
+                    year = _infer_year_from_duration(existing_dur["value"])
+                    if year:
+                        value = f"{value} {year}"
+                        confidence = "inferred"
+            break
+
+    # Special case: birth_year key merges into birthday
+    if key_lower == "birth_year":
+        existing = db.profile_get("birthday")
+        if existing and not re.search(r'\d{4}', existing["value"]):
+            merged = f"{existing['value']} {value}"
+            db.profile_set("birthday", merged, source=source, confidence=confidence)
+            db.profile_set(key, value, source=source, confidence=confidence)
+            return f"Updated birthday to: {merged}"
 
     db.profile_set(key, value, source=source, confidence=confidence)
     return f"Stored: {key} = {value}"
@@ -151,7 +193,7 @@ def get_relevant_facts(topic):
     facts = db.profile_get_all()
     if not facts:
         return "No profile information available."
-    # Simple keyword matching ÃÂ¢ÃÂÃÂ good enough for now
+    # Simple keyword matching ÃÂÃÂ¢ÃÂÃÂÃÂÃÂ good enough for now
     topic_lower = topic.lower()
     relevant = [f for f in facts if
                 topic_lower in f['key'].lower() or
@@ -160,7 +202,7 @@ def get_relevant_facts(topic):
         return "\n".join([f"{f['key']}: {f['value']}" for f in relevant])
     return "No specific information found for that topic."
 
-# Self-register ÃÂ¢ÃÂÃÂ two tools: read and write
+# Self-register ÃÂÃÂ¢ÃÂÃÂÃÂÃÂ two tools: read and write
 tools.register(
     name        = "store_user_fact",
     description = (
