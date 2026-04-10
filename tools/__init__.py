@@ -1,9 +1,9 @@
 # tools/__init__.py
-# Tool registry — discovers, registers and executes tools.
+# Tool registry â discovers, registers and executes tools.
 # Permission tiers:
-#   FREE    — read-only, executes silently
-#   CONFIRM — writes/launches, asks user unless they've disabled confirmation
-#   LOCKED  — hardcoded refusal, cannot be unlocked
+#   FREE    â read-only, executes silently
+#   CONFIRM â writes/launches, asks user unless they've disabled confirmation
+#   LOCKED  â hardcoded refusal, cannot be unlocked
 
 import db
 
@@ -45,7 +45,7 @@ def get_definitions():
 def execute(name, arguments, confirm_fn=None):
     """
     Execute a tool by name with given arguments dict.
-    confirm_fn: callable(prompt) -> bool — used for CONFIRM tier tools.
+    confirm_fn: callable(prompt) -> bool â used for CONFIRM tier tools.
     Returns (success, result_string).
     """
     if name not in _registry:
@@ -73,5 +73,6 @@ def execute(name, arguments, confirm_fn=None):
 
 def load_all():
     """Import all tool modules so they self-register."""
-    from tools import system_info  # noqa: F401
+    from tools import system_info   # noqa: F401
+    from tools import user_profile  # noqa: F401
     # Add new tool imports here as they are created
