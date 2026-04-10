@@ -19,6 +19,9 @@ DEFAULTS = {
     "home_pc_endpoint":       ("",                    "Home llama.cpp server URL",               1),
     "remote_api_endpoint":    ("",                    "Fallback remote API URL",                 1),
     "first_boot_complete":    ("0",                   "Set to 1 after first boot completes",     0),
+    "last_interaction":      ("",                    "Timestamp of last user interaction",      0),
+    "dream_pending":         ("0",                   "1 if new interactions since last dream",  0),
+    "dream_delay":           ("2",                   "Minutes of silence before dream cycle",   1),
     "quiet_hours_start":      ("22:00",               "Quiet hours start time (HH:MM)",          1),
     "quiet_hours_end":        ("07:00",               "Quiet hours end time (HH:MM)",            1),
     "awareness_interval":     ("5",                   "Background awareness check interval (mins)", 1),
@@ -184,6 +187,37 @@ def reminder_mark_fired(reminder_id):
     with get_connection() as conn:
         conn.execute("UPDATE reminders SET fired = 1 WHERE id = ?", (reminder_id,))
         conn.commit()
+
+
+def touch_interaction():
+    """Update last_interaction timestamp and set dream_pending."""
+    from datetime import datetime
+    with get_connection() as conn:
+        now = datetime.now().isoformat()
+        conn.execute("UPDATE config SET value = ? WHERE key = 'last_interaction'", (now,))
+        conn.execute("UPDATE config SET value = '1' WHERE key = 'dream_pending'")
+        conn.commit()
+
+def dream_complete():
+    """Mark dream as done — clear dream_pending."""
+    with get_connection() as conn:
+        conn.execute("UPDATE config SET value = '0' WHERE key = 'dream_pending'")
+        conn.commit()
+
+def should_dream():
+    """Return True if dream_pending and silence >= dream_delay minutes."""
+    from datetime import datetime
+    if get("dream_pending") != "1":
+        return False
+    last = get("last_interaction")
+    if not last:
+        return False
+    try:
+        delay   = float(get("dream_delay") or "2")
+        elapsed = (datetime.now() - datetime.fromisoformat(last)).total_seconds() / 60
+        return elapsed >= delay
+    except Exception:
+        return False
 
 if __name__ == "__main__":
     init_db()
