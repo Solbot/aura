@@ -1,35 +1,35 @@
 # awareness.py
 # Background awareness thread.
 # Handles: reminders (always autonomous), thermal/hardware alerts (always autonomous),
-# date-based events (queued to hot memory), periodic time awareness.
+# date-based events (queued to hot memory), dream cycle trigger.
 
 import threading
 import queue
 import time
 import db
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # Message types
-IMMEDIATE = "immediate"   # Speak now regardless of quiet hours
-QUEUED    = "queued"      # Inject into hot memory at next interaction
+IMMEDIATE = "immediate"
+QUEUED    = "queued"
 
-# Global queues — aura.py reads from these
+# Global queues
 immediate_queue = queue.Queue()
 hot_memory_queue = queue.Queue()
 
 _stop_event = threading.Event()
-_last_date = None   # Track date changes mid-session
+_last_date  = None
+_dream_running = False
 
 def _is_quiet_hours():
     try:
-        now = datetime.now()
+        now       = datetime.now()
         start_str = db.get("quiet_hours_start") or "22:00"
         end_str   = db.get("quiet_hours_end")   or "07:00"
         start_h, start_m = map(int, start_str.split(":"))
         end_h,   end_m   = map(int, end_str.split(":"))
         start = now.replace(hour=start_h, minute=start_m, second=0, microsecond=0)
         end   = now.replace(hour=end_h,   minute=end_m,   second=0, microsecond=0)
-        # Handle overnight quiet hours (e.g. 22:00 to 07:00)
         if start > end:
             return now >= start or now <= end
         return start <= now <= end
@@ -68,10 +68,9 @@ def _check_reminders():
 def _check_date_events():
     global _last_date
     try:
-        now  = datetime.now()
+        now   = datetime.now()
         today = now.date()
 
-        # Check for midnight crossing
         if _last_date and _last_date != today:
             hot_memory_queue.put({
                 "type":    QUEUED,
@@ -81,11 +80,10 @@ def _check_date_events():
 
         _last_date = today
 
-        # Check for upcoming dates in user profile
-        upcoming = db.profile_get_upcoming_dates(days_ahead=0)  # Today only
+        upcoming = db.profile_get_upcoming_dates(days_ahead=0)
         for event in upcoming:
             if event["days_until"] == 0:
-                key = event["key"]
+                key   = event["key"]
                 value = event["value"]
                 if "birthday" in key.lower():
                     name = db.get("user_informal_name") or "there"
@@ -103,6 +101,22 @@ def _check_date_events():
     except Exception:
         pass
 
+def _check_dream():
+    """Trigger dream cycle if pending and silence threshold reached."""
+    global _dream_running
+    if _dream_running:
+        return
+    try:
+        if db.should_dream():
+            _dream_running = True
+            import dream
+            endpoint = db.get('home_pc_endpoint') or "http://localhost:8080/v1/chat/completions"
+            dream.dream(endpoint)
+            db.dream_complete()
+            _dream_running = False
+    except Exception:
+        _dream_running = False
+
 def _awareness_loop():
     global _last_date
     _last_date = datetime.now().date()
@@ -113,40 +127,33 @@ def _awareness_loop():
         except Exception:
             interval = 5
 
-        # Always check reminders and temperature regardless of quiet hours
+        # Always check reminders and temperature
         _check_reminders()
         _check_temperature()
+        _check_dream()
 
-        # Only queue date events if not in quiet hours
         if not _is_quiet_hours():
             _check_date_events()
 
-        # Wait for next check, but wake up every 30s to check reminders
-        # (reminders need sub-interval precision)
-        checks = max(1, interval * 2)  # interval minutes in 30s chunks
+        # Sleep in 30s chunks so reminders fire promptly
+        checks = max(1, interval * 2)
         for _ in range(checks):
             if _stop_event.is_set():
                 break
             time.sleep(30)
-            _check_reminders()   # Always check reminders every 30s
+            _check_reminders()
+            _check_dream()
 
 def start():
-    """Start the background awareness thread."""
     _stop_event.clear()
     t = threading.Thread(target=_awareness_loop, daemon=True, name="awareness")
     t.start()
     return t
 
 def stop():
-    """Stop the background awareness thread."""
     _stop_event.set()
 
 def get_hot_memory_note():
-    """
-    Return a combined note from all queued hot memory items.
-    Called before each LLM interaction to inject awareness context.
-    Returns None if nothing queued.
-    """
     notes = []
     while not hot_memory_queue.empty():
         try:
@@ -157,10 +164,6 @@ def get_hot_memory_note():
     return "\n".join(notes) if notes else None
 
 def get_immediate_message():
-    """
-    Return the next immediate message if one is queued.
-    Returns None if nothing pending.
-    """
     try:
         return immediate_queue.get_nowait()
     except queue.Empty:
