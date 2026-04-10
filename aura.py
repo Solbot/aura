@@ -6,6 +6,8 @@ import db
 import csam
 import tools
 import first_boot
+import awareness
+from tools import user_profile
 from piper import PiperVoice, SynthesisConfig
 
 # --- Initialise database and tools ---
@@ -41,6 +43,9 @@ if db.is_first_boot():
     first_boot.run(speak)
     voice, syn_config = load_voice()
 
+# --- Start background awareness thread ---
+awareness.start()
+
 # --- Build system prompt ---
 def build_system_prompt():
     return (
@@ -53,11 +58,10 @@ def build_system_prompt():
         f"You treat the user as an equal. You are honest and never manipulative. "
         f"You are aware you are an AI running on a Raspberry Pi. "
         f"If sincerely asked whether you are an AI, always answer honestly.\n\n"
-        f"You have access to tools. When the user asks about the current time, date, "
-        f"system status, temperature, fan, disk space, RAM, uptime or network — always "
-        f"call the get_system_info tool rather than guessing. "
-        f"IMPORTANT: When you receive tool results, you MUST present the exact numbers "
-        f"from those results. Never paraphrase vaguely. Say '2400 RPM' not 'moderate speed'."
+        f"You have access to tools. Use get_system_info for time/date/temperature/sensors. "
+        f"Use store_user_fact whenever the user shares personal information worth remembering. "
+        f"Use get_user_facts when you need to recall something about the user. "
+        f"IMPORTANT: When you receive tool results, present the exact numbers and values naturally."
     )
 
 ENDPOINT       = db.get('home_pc_endpoint') or "http://localhost:8080/v1/chat/completions"
@@ -76,8 +80,16 @@ def llm_call(messages, use_tools=True):
     r = requests.post(ENDPOINT, json=payload)
     return r.json()
 
-def chat(user_input):
+def chat(user_input, hot_memory_note=None):
     global _csam_locked
+
+    # Inject hot memory note as a hidden system context if present
+    if hot_memory_note:
+        conversation.append({
+            "role":    "system",
+            "content": f"[Background awareness note — act on this naturally if relevant]: {hot_memory_note}"
+        })
+
     conversation.append({"role": "user", "content": user_input})
 
     # First LLM call
@@ -87,14 +99,11 @@ def chat(user_input):
 
     # Handle tool calls
     if message.get("tool_calls"):
-        # Append assistant message — content must be None not empty string
         conversation.append({
             "role":       "assistant",
             "content":    None,
             "tool_calls": message["tool_calls"]
         })
-
-        # Execute each tool and collect results
         tool_results_summary = []
         for tc in message["tool_calls"]:
             fn_name = tc["function"]["name"]
@@ -110,25 +119,22 @@ def chat(user_input):
                 "name":         fn_name,
                 "content":      result
             })
-
-        # Add explicit instruction to use exact values
         instruction = (
             f"Tool results: {' | '.join(tool_results_summary)}\n\n"
             f"Using these exact values, answer the user's question naturally. "
-            f"Include the specific numbers and units."
+            f"Include specific numbers and units."
         )
         conversation.append({"role": "user", "content": instruction})
-
-        # Second LLM call
         data2 = llm_call(conversation, use_tools=False)
         reply = data2["choices"][0]["message"].get("content") or ""
-
-        # Remove the instruction from conversation history
-        conversation.pop()
+        conversation.pop()  # Remove instruction
 
     # CSAM check
     if csam.is_triggered(reply):
         _csam_locked = True
+        # Remove hot memory note and user input from history
+        if hot_memory_note:
+            conversation.pop()  # remove note
         csam.handle(
             conversation  = conversation,
             trigger_input = user_input,
@@ -136,7 +142,7 @@ def chat(user_input):
             speak_fn      = speak,
             print_fn      = lambda m: print(f"\n{ASSISTANT_NAME}: {m}")
         )
-        conversation.pop()
+        conversation.pop()  # Remove user input
         return None
 
     if _csam_locked:
@@ -145,14 +151,44 @@ def chat(user_input):
         return short
 
     conversation.append({"role": "assistant", "content": reply})
+
+    # Background fact extraction — runs silently after each turn
+    recent = conversation[-4:]  # Last 2 exchanges
+    transcript = "\n".join([f"{m['role'].upper()}: {m.get('content','')}"
+                             for m in recent if m.get('content') and m['role'] != 'system'])
+    if transcript:
+        threading.Thread(
+            target=user_profile.extract_and_store,
+            args=(transcript,),
+            daemon=True
+        ).start()
+
     return reply
+
+# Need threading for background extraction
+import threading
 
 print(f"\n{ASSISTANT_NAME} is online. Type 'quit' to exit.")
 while True:
+    # Check for immediate messages (reminders, thermal alerts) before waiting for input
+    immediate = awareness.get_immediate_message()
+    if immediate:
+        msg = immediate["message"]
+        print(f"\n{ASSISTANT_NAME}: {msg}")
+        speak(msg)
+        # Add to conversation so Aether has context
+        conversation.append({"role": "assistant", "content": msg})
+        continue
+
     user_input = input(f"\nYou: ").strip()
     if user_input.lower() == "quit":
+        awareness.stop()
         break
-    reply = chat(user_input)
+
+    # Get any queued hot memory notes
+    hot_note = awareness.get_hot_memory_note()
+
+    reply = chat(user_input, hot_memory_note=hot_note)
     if reply:
         print(f"\n{ASSISTANT_NAME}: {reply}")
         speak(reply)
