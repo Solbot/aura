@@ -1,5 +1,5 @@
 # tools/user_profile.py
-# User profile tool ÃÂÃÂ¢ÃÂÃÂÃÂÃÂ stores and retrieves facts Aether learns about the user.
+# User profile tool ÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ stores and retrieves facts Aether learns about the user.
 # Facts are persisted in SQLite with timestamps and confidence levels.
 
 import tools
@@ -23,7 +23,7 @@ Store dates in "Month DD" format e.g. "April 10", "December 25".
 
 Return ONLY a valid JSON array of objects, each with:
 - key: short snake_case label (e.g. "birthday", "wife_name", "job_title")
-- value: the fact value ÃÂ¢ÃÂÃÂ always use absolute dates, never relative ones
+- value: the fact value ÃÂÃÂ¢ÃÂÃÂÃÂÃÂ always use absolute dates, never relative ones
 - confidence: "high" if stated directly, "inferred" if calculated or implied
 
 If no new facts are found, return an empty array [].
@@ -74,13 +74,17 @@ def _resolve_date(value):
 # Duration key -> date key mappings for automatic year inference
 _DURATION_TO_DATE = {
     "birth_year":       "birthday",
-    "years_married":    "wedding_anniversary",
-    "married_years":    "wedding_anniversary",
+    "years_married":    "anniversary",
+    "married_years":    "anniversary",
+    "wedding_years":    "anniversary",
     "years_together":   "anniversary",
     "years_at_job":     "job_start",
     "years_employed":   "job_start",
     "years_in_home":    "moved_in",
 }
+
+# All known anniversary-type keys (LLM may use any of these)
+_ANNIVERSARY_KEYS = {"anniversary", "wedding_anniversary", "marriage_anniversary"}
 
 def _infer_year_from_duration(years_str):
     """Calculate event year from duration: current_year - years_ago."""
@@ -193,7 +197,7 @@ def get_relevant_facts(topic):
     facts = db.profile_get_all()
     if not facts:
         return "No profile information available."
-    # Simple keyword matching ÃÂÃÂ¢ÃÂÃÂÃÂÃÂ good enough for now
+    # Simple keyword matching ÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ good enough for now
     topic_lower = topic.lower()
     relevant = [f for f in facts if
                 topic_lower in f['key'].lower() or
@@ -202,7 +206,7 @@ def get_relevant_facts(topic):
         return "\n".join([f"{f['key']}: {f['value']}" for f in relevant])
     return "No specific information found for that topic."
 
-# Self-register ÃÂÃÂ¢ÃÂÃÂÃÂÃÂ two tools: read and write
+# Self-register ÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ two tools: read and write
 tools.register(
     name        = "store_user_fact",
     description = (
