@@ -8,7 +8,7 @@ import tools
 import first_boot
 import awareness
 import dream
-import threading
+import memory
 from piper import PiperVoice, SynthesisConfig
 
 # --- Initialise database and tools ---
@@ -49,11 +49,11 @@ awareness.start()
 
 # --- Build system prompt ---
 def build_system_prompt():
-    # Load profile â prefer dream-consolidated facts over raw conversation facts
+    # Load profile — dream facts take priority over raw conversation facts
     facts = db.profile_get_all()
     dream_facts = {f['key']: f['value'] for f in facts if f['source'] == 'dream'}
     all_facts   = {f['key']: f['value'] for f in facts}
-    merged = {**all_facts, **dream_facts}  # dream takes priority
+    merged = {**all_facts, **dream_facts}
 
     profile_str = ""
     if merged:
@@ -79,21 +79,23 @@ def build_system_prompt():
         "- You have NO external weather sensors. Never invent weather data.\n"
         "- When the user shares personal facts (birthday, family, job, preferences, "
         "important dates, hobbies): IMMEDIATELY call store_user_fact.\n"
-        "- Pass values exactly as the user says them â the system will clean and normalise them.\n"
+        "- Pass values exactly as the user says them — the system will clean and normalise them.\n"
         "- Use get_user_facts when asked to recall something about the user.\n"
         "- Present tool results as exact values naturally in conversation."
     )
 
 ENDPOINT       = db.get('home_pc_endpoint') or "http://localhost:8080/v1/chat/completions"
 ASSISTANT_NAME = db.get('assistant_name')
-conversation   = [{"role": "system", "content": build_system_prompt()}]
+SYSTEM_PROMPT  = build_system_prompt()
 
 def confirm_fn(prompt):
     response = input(prompt).strip().lower()
     return response in ("yes", "y")
 
-def llm_call(messages, use_tools=True):
-    payload = {"messages": messages, "max_tokens": 512}
+def llm_call(use_tools=True):
+    """Build context from memory and call LLM."""
+    messages = memory.get_context(SYSTEM_PROMPT)
+    payload  = {"messages": messages, "max_tokens": 512}
     if use_tools:
         payload["tools"]       = tools.get_definitions()
         payload["tool_choice"] = "auto"
@@ -117,11 +119,10 @@ def llm_call(messages, use_tools=True):
 def process_tool_calls(message):
     if not message.get("tool_calls"):
         return None
-    conversation.append({
-        "role":       "assistant",
-        "content":    None,
-        "tool_calls": message["tool_calls"]
-    })
+    # Add assistant tool-call message to memory
+    memory.add_message("assistant", json.dumps({
+        "tool_calls": [tc["function"] for tc in message["tool_calls"]]
+    }))
     tool_results_summary = []
     for tc in message["tool_calls"]:
         fn_name = tc["function"]["name"]
@@ -131,30 +132,22 @@ def process_tool_calls(message):
             fn_args = {}
         success, result = tools.execute(fn_name, fn_args, confirm_fn)
         tool_results_summary.append(result)
-        conversation.append({
-            "role":         "tool",
-            "tool_call_id": tc["id"],
-            "name":         fn_name,
-            "content":      result
-        })
     return tool_results_summary
 
 def chat(user_input, hot_memory_note=None):
     global _csam_locked
 
+    # Inject background awareness note if any
     if hot_memory_note:
-        conversation.append({
-            "role":    "system",
-            "content": f"[Background awareness â act on this naturally if relevant]: {hot_memory_note}"
-        })
+        memory.add_message("system", f"[Background awareness]: {hot_memory_note}")
 
-    conversation.append({"role": "user", "content": user_input})
+    # Add user message to memory
+    memory.add_message("user", user_input)
 
-    # LLM loop â handles chained tool calls
-    max_iterations = 5
+    # LLM loop — handles chained tool calls
     reply = ""
-    for _ in range(max_iterations):
-        data    = llm_call(conversation)
+    for _ in range(5):
+        data    = llm_call(use_tools=True)
         message = data["choices"][0]["message"]
         reply   = message.get("content") or ""
 
@@ -166,11 +159,14 @@ def chat(user_input, hot_memory_note=None):
             f"Tool results: {' | '.join(results)}\n\n"
             f"Continue naturally using these exact values."
         )
-        conversation.append({"role": "user", "content": instruction})
-        data2   = llm_call(conversation, use_tools=True)
+        memory.add_message("user", instruction)
+        data2   = llm_call(use_tools=False)
         message = data2["choices"][0]["message"]
         reply   = message.get("content") or ""
-        conversation.pop()
+        # Remove the tool instruction from hot memory
+        hot = memory.get_hot()
+        if hot and hot[-1]["content"] == instruction:
+            hot.pop()
 
         if not message.get("tool_calls"):
             break
@@ -178,32 +174,21 @@ def chat(user_input, hot_memory_note=None):
     # CSAM check
     if csam.is_triggered(reply):
         _csam_locked = True
-        if hot_memory_note:
-            conversation.pop()
         csam.handle(
-            conversation  = conversation,
+            conversation  = memory.get_context(SYSTEM_PROMPT),
             trigger_input = user_input,
             location      = db.get('location'),
             speak_fn      = speak,
             print_fn      = lambda m: print(f"\n{ASSISTANT_NAME}: {m}")
         )
-        conversation.pop()
         return None
 
     if _csam_locked:
-        short = "I've already shared resources that can help. I'm not able to discuss this further."
-        conversation.append({"role": "assistant", "content": short})
-        return short
+        reply = "I've already shared resources that can help. I'm not able to discuss this further."
 
-    conversation.append({"role": "assistant", "content": reply})
+    # Add assistant reply to memory
+    memory.add_message("assistant", reply)
     return reply
-
-def shutdown():
-    """Clean shutdown â run dream cycle then stop awareness thread."""
-    awareness.stop()
-    print("\n[Aether is dreaming... consolidating memories]")
-    dream.dream(ENDPOINT)
-    print("[Done]")
 
 print(f"\n{ASSISTANT_NAME} is online. Type 'quit' to exit.")
 while True:
@@ -212,12 +197,12 @@ while True:
         msg = immediate["message"]
         print(f"\n{ASSISTANT_NAME}: {msg}")
         speak(msg)
-        conversation.append({"role": "assistant", "content": msg})
+        memory.add_message("assistant", msg)
         continue
 
     user_input = input(f"\nYou: ").strip()
     if user_input.lower() == "quit":
-        shutdown()
+        awareness.stop()
         break
 
     db.touch_interaction()
