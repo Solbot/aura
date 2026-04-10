@@ -7,7 +7,6 @@ import csam
 import tools
 import first_boot
 import awareness
-import dream
 import memory
 from piper import PiperVoice, SynthesisConfig
 
@@ -49,7 +48,6 @@ awareness.start()
 
 # --- Build system prompt ---
 def build_system_prompt():
-    # Load profile — dream facts take priority over raw conversation facts
     facts = db.profile_get_all()
     dream_facts = {f['key']: f['value'] for f in facts if f['source'] == 'dream'}
     all_facts   = {f['key']: f['value'] for f in facts}
@@ -92,10 +90,9 @@ def confirm_fn(prompt):
     response = input(prompt).strip().lower()
     return response in ("yes", "y")
 
-def llm_call(use_tools=True):
-    """Build context from memory and call LLM."""
-    messages = memory.get_context(SYSTEM_PROMPT)
-    payload  = {"messages": messages, "max_tokens": 512}
+def llm_call(messages, use_tools=True):
+    """Call LLM with an explicit message list."""
+    payload = {"messages": messages, "max_tokens": 512}
     if use_tools:
         payload["tools"]       = tools.get_definitions()
         payload["tool_choice"] = "auto"
@@ -116,56 +113,64 @@ def llm_call(use_tools=True):
             "tool_calls": None
         }}]}
 
-def process_tool_calls(message):
-    if not message.get("tool_calls"):
-        return None
-    # Add assistant tool-call message to memory
-    memory.add_message("assistant", json.dumps({
-        "tool_calls": [tc["function"] for tc in message["tool_calls"]]
-    }))
-    tool_results_summary = []
-    for tc in message["tool_calls"]:
-        fn_name = tc["function"]["name"]
-        try:
-            fn_args = json.loads(tc["function"]["arguments"])
-        except Exception:
-            fn_args = {}
-        success, result = tools.execute(fn_name, fn_args, confirm_fn)
-        tool_results_summary.append(result)
-    return tool_results_summary
-
 def chat(user_input, hot_memory_note=None):
     global _csam_locked
 
-    # Inject background awareness note if any
     if hot_memory_note:
         memory.add_message("system", f"[Background awareness]: {hot_memory_note}")
 
-    # Add user message to memory
     memory.add_message("user", user_input)
 
-    # LLM loop — handles chained tool calls
     reply = ""
     for _ in range(5):
-        data    = llm_call(use_tools=True)
-        message = data["choices"][0]["message"]
-        reply   = message.get("content") or ""
+        # Get full context including warm summaries
+        messages = memory.get_context(SYSTEM_PROMPT)
+        data     = llm_call(messages, use_tools=True)
+        message  = data["choices"][0]["message"]
+        reply    = message.get("content") or ""
 
         if not message.get("tool_calls"):
             break
 
-        results = process_tool_calls(message)
+        # Store the assistant tool-call message directly in hot memory
+        # (must preserve exact structure llama.cpp expects)
+        memory.get_hot().append({
+            "role":       "assistant",
+            "content":    None,
+            "tool_calls": message["tool_calls"]
+        })
+
+        # Execute tools and add results
+        tool_results = []
+        for tc in message["tool_calls"]:
+            fn_name = tc["function"]["name"]
+            try:
+                fn_args = json.loads(tc["function"]["arguments"])
+            except Exception:
+                fn_args = {}
+            success, result = tools.execute(fn_name, fn_args, confirm_fn)
+            tool_results.append(result)
+            memory.get_hot().append({
+                "role":         "tool",
+                "tool_call_id": tc["id"],
+                "name":         fn_name,
+                "content":      result
+            })
+
+        # Inject tool results as a user message for the follow-up call
         instruction = (
-            f"Tool results: {' | '.join(results)}\n\n"
+            f"Tool results: {' | '.join(tool_results)}\n\n"
             f"Continue naturally using these exact values."
         )
         memory.add_message("user", instruction)
-        data2   = llm_call(use_tools=False)
-        message = data2["choices"][0]["message"]
-        reply   = message.get("content") or ""
-        # Remove the tool instruction from hot memory
+        messages2 = memory.get_context(SYSTEM_PROMPT)
+        data2     = llm_call(messages2, use_tools=False)
+        message   = data2["choices"][0]["message"]
+        reply     = message.get("content") or ""
+
+        # Remove the tool instruction from hot — it was scaffolding
         hot = memory.get_hot()
-        if hot and hot[-1]["content"] == instruction:
+        if hot and hot[-1].get("content") == instruction:
             hot.pop()
 
         if not message.get("tool_calls"):
@@ -186,7 +191,6 @@ def chat(user_input, hot_memory_note=None):
     if _csam_locked:
         reply = "I've already shared resources that can help. I'm not able to discuss this further."
 
-    # Add assistant reply to memory
     memory.add_message("assistant", reply)
     return reply
 
