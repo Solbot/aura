@@ -1,5 +1,5 @@
 # tools/user_profile.py
-# User profile tool â stores and retrieves facts Aether learns about the user.
+# User profile tool Ã¢ÂÂ stores and retrieves facts Aether learns about the user.
 # Facts are persisted in SQLite with timestamps and confidence levels.
 
 import tools
@@ -23,7 +23,7 @@ Store dates in "Month DD" format e.g. "April 10", "December 25".
 
 Return ONLY a valid JSON array of objects, each with:
 - key: short snake_case label (e.g. "birthday", "wife_name", "job_title")
-- value: the fact value — always use absolute dates, never relative ones
+- value: the fact value â always use absolute dates, never relative ones
 - confidence: "high" if stated directly, "inferred" if calculated or implied
 
 If no new facts are found, return an empty array [].
@@ -36,8 +36,47 @@ def _llm(messages, max_tokens=512):
     r = requests.post(_get_endpoint(), json={"messages": messages, "max_tokens": max_tokens})
     return r.json()["choices"][0]["message"]["content"]
 
+def _resolve_date(value):
+    """
+    Resolve relative date references to absolute Month DD format.
+    Catches: today, tomorrow, yesterday, day names without months.
+    """
+    from datetime import datetime, timedelta
+    import re
+    v = value.strip().lower()
+    now = datetime.now()
+
+    if v == "today":
+        return now.strftime("%B %d")
+    if v == "tomorrow":
+        return (now + timedelta(days=1)).strftime("%B %d")
+    if v == "yesterday":
+        return (now - timedelta(days=1)).strftime("%B %d")
+
+    # Day names like "monday", "next friday" without a month
+    day_names = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"]
+    for day in day_names:
+        if day in v and not re.search(
+            r'jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec', v, re.IGNORECASE
+        ):
+            # Calculate the next occurrence of that day
+            target = ["monday","tuesday","wednesday","thursday",
+                      "friday","saturday","sunday"].index(day)
+            current = now.weekday()
+            days_ahead = (target - current) % 7
+            if days_ahead == 0:
+                days_ahead = 7 if "next" in v else 0
+            resolved = now + timedelta(days=days_ahead)
+            return resolved.strftime("%B %d")
+
+    return value  # Already absolute, return unchanged
+
 def store_fact(key, value, confidence="high", source="conversation"):
-    """Store a fact about the user."""
+    """Store a fact about the user. Automatically resolves relative dates."""
+    # For date-related keys, always resolve relative references
+    date_keys = ["birthday", "anniversary", "date", "born", "due"]
+    if any(dk in key.lower() for dk in date_keys):
+        value = _resolve_date(value)
     db.profile_set(key, value, source=source, confidence=confidence)
     return f"Stored: {key} = {value}"
 
@@ -88,7 +127,7 @@ def get_relevant_facts(topic):
     facts = db.profile_get_all()
     if not facts:
         return "No profile information available."
-    # Simple keyword matching â good enough for now
+    # Simple keyword matching Ã¢ÂÂ good enough for now
     topic_lower = topic.lower()
     relevant = [f for f in facts if
                 topic_lower in f['key'].lower() or
@@ -97,7 +136,7 @@ def get_relevant_facts(topic):
         return "\n".join([f"{f['key']}: {f['value']}" for f in relevant])
     return "No specific information found for that topic."
 
-# Self-register â two tools: read and write
+# Self-register Ã¢ÂÂ two tools: read and write
 tools.register(
     name        = "store_user_fact",
     description = (
