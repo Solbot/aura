@@ -39,11 +39,9 @@ def _nvme_temp():
     return round(t / 1000, 1) if t is not None else None
 
 def _fan_rpm():
-    # Try glob in case hwmon index shifts
     paths = glob.glob("/sys/devices/platform/cooling_fan/hwmon/*/fan1_input")
     if paths:
-        v = _read_int(paths[0])
-        return v
+        return _read_int(paths[0])
     return None
 
 def _fan_pwm():
@@ -61,10 +59,10 @@ def _cpu_throttle():
         val = r.stdout.strip().split("=")[-1]
         code = int(val, 16)
         flags = []
-        if code & 0x1:   flags.append("undervoltage detected")
-        if code & 0x2:   flags.append("frequency capped")
-        if code & 0x4:   flags.append("throttled")
-        if code & 0x8:   flags.append("soft temperature limit")
+        if code & 0x1:     flags.append("undervoltage detected")
+        if code & 0x2:     flags.append("frequency capped")
+        if code & 0x4:     flags.append("throttled")
+        if code & 0x8:     flags.append("soft temperature limit active")
         if code & 0x10000: flags.append("undervoltage has occurred")
         if code & 0x20000: flags.append("frequency capping has occurred")
         if code & 0x40000: flags.append("throttling has occurred")
@@ -80,8 +78,8 @@ def _uptime():
         hours, rem = divmod(td.seconds, 3600)
         mins, _ = divmod(rem, 60)
         parts = []
-        if td.days:    parts.append(f"{td.days}d")
-        if hours:      parts.append(f"{hours}h")
+        if td.days:  parts.append(f"{td.days}d")
+        if hours:    parts.append(f"{hours}h")
         parts.append(f"{mins}m")
         return " ".join(parts)
     return None
@@ -138,94 +136,90 @@ def _gpio_state():
     try:
         r = subprocess.run(["pinctrl", "get"],
                            capture_output=True, text=True, timeout=5)
-        if r.returncode == 0:
-            return r.stdout.strip()
-        return None
+        return r.stdout.strip() if r.returncode == 0 else None
     except Exception:
         return None
 
 def _pisugur_battery():
     # Placeholder — PiSugar 3 communicates via I2C
-    # Will be implemented when hardware arrives
     return None
+
+# Map query keywords to handler functions
+_QUERY_MAP = {
+    "datetime":    lambda: f"Date/time: {datetime.now().strftime('%A %B %d %Y, %I:%M:%S %p')}",
+    "date":        lambda: f"Date/time: {datetime.now().strftime('%A %B %d %Y, %I:%M:%S %p')}",
+    "time":        lambda: f"Date/time: {datetime.now().strftime('%A %B %d %Y, %I:%M:%S %p')}",
+    "uptime":      lambda: f"Uptime: {_uptime()}" if _uptime() else None,
+    "temperature": lambda: "\n".join(filter(None, [
+                       f"CPU temperature: {_cpu_temp()}°C" + (" ⚠ running hot" if _cpu_temp() and _cpu_temp() > 75 else "") if _cpu_temp() is not None else None,
+                       f"NVMe temperature: {_nvme_temp()}°C" if _nvme_temp() is not None else None
+                   ])),
+    "temp":        None,  # alias, set below
+    "fan":         lambda: f"Fan speed: {_fan_rpm()} RPM ({_fan_pwm()}% PWM)" if _fan_rpm() is not None else None,
+    "fan_speed":   None,  # alias
+    "cpu":         lambda: "\n".join(filter(None, [
+                       f"CPU frequency: {_cpu_freq()} MHz" if _cpu_freq() else None,
+                       f"CPU status: {', '.join(_cpu_throttle())}" if _cpu_throttle() else None
+                   ])),
+    "disk":        lambda: f"Disk: {_disk_usage()['used_gb']}GB used of {_disk_usage()['total_gb']}GB ({_disk_usage()['used_pct']}% full, {_disk_usage()['free_gb']}GB free)" if _disk_usage() else None,
+    "storage":     None,  # alias
+    "ram":         lambda: f"RAM: {_ram_usage()['used_mb']}MB used of {_ram_usage()['total_mb']}MB ({_ram_usage()['used_pct']}% used)" if _ram_usage() else None,
+    "memory":      None,  # alias
+    "network":     lambda: f"Network: connected via {_network().get('interface')} ({_network().get('ip')})" if _network().get('connected') else "Network: no connectivity",
+    "connectivity":None,  # alias
+    "gpio":        lambda: f"GPIO state:\n{_gpio_state()}" if _gpio_state() else "GPIO: unable to read state",
+    "battery":     lambda: f"Battery: {_pisugur_battery()}" if _pisugur_battery() else "Battery: PiSugar not yet connected",
+}
+# Set aliases
+_QUERY_MAP["temp"]         = _QUERY_MAP["temperature"]
+_QUERY_MAP["fan_speed"]    = _QUERY_MAP["fan"]
+_QUERY_MAP["storage"]      = _QUERY_MAP["disk"]
+_QUERY_MAP["memory"]       = _QUERY_MAP["ram"]
+_QUERY_MAP["connectivity"] = _QUERY_MAP["network"]
 
 def get_system_info(query=None):
     """
     Query system state. Returns a human-readable string.
-    query: datetime | temperature | fan | disk | ram | network |
-           cpu | gpio | uptime | battery | all
+    Accepts single queries or comma/space separated multiple queries.
+    query examples: "datetime", "fan", "temperature", "fan,datetime", "all"
     """
-    query   = (query or "all").lower()
+    if not query or query.strip().lower() == "all":
+        # Run all queries
+        queries = ["datetime", "uptime", "temperature", "fan", "cpu", "disk", "ram", "network"]
+    else:
+        # Split on comma, semicolon or space and clean up
+        import re
+        queries = [q.strip().lower() for q in re.split(r'[,;\s]+', query) if q.strip()]
+
     results = []
+    seen = set()
+    for q in queries:
+        # Normalise aliases
+        if q in ("date", "time"):
+            q = "datetime"
+        if q in ("temp",):
+            q = "temperature"
+        if q in ("fan_speed",):
+            q = "fan"
+        if q in ("storage",):
+            q = "disk"
+        if q in ("memory",):
+            q = "ram"
+        if q in ("connectivity",):
+            q = "network"
 
-    if query in ("datetime", "date", "time", "all"):
-        now = datetime.now()
-        results.append(f"Date/time: {now.strftime('%A %B %d %Y, %I:%M:%S %p')}")
+        if q in seen:
+            continue
+        seen.add(q)
 
-    if query in ("uptime", "all"):
-        u = _uptime()
-        if u:
-            results.append(f"Uptime: {u}")
-
-    if query in ("temperature", "temp", "all"):
-        ct = _cpu_temp()
-        nt = _nvme_temp()
-        if ct is not None:
-            warn = " ⚠ running hot" if ct > 75 else ""
-            results.append(f"CPU temperature: {ct}°C{warn}")
-        if nt is not None:
-            results.append(f"NVMe temperature: {nt}°C")
-
-    if query in ("fan", "all"):
-        rpm = _fan_rpm()
-        pwm = _fan_pwm()
-        if rpm is not None:
-            results.append(f"Fan speed: {rpm} RPM ({pwm}% PWM)")
-
-    if query in ("cpu", "all"):
-        freq = _cpu_freq()
-        throttle = _cpu_throttle()
-        if freq:
-            results.append(f"CPU frequency: {freq} MHz")
-        if throttle:
-            results.append(f"CPU status: {', '.join(throttle)}")
-
-    if query in ("disk", "storage", "all"):
-        d = _disk_usage()
-        if d:
-            results.append(
-                f"Disk: {d['used_gb']}GB used of {d['total_gb']}GB "
-                f"({d['used_pct']}% full, {d['free_gb']}GB free)"
-            )
-
-    if query in ("ram", "memory", "all"):
-        r = _ram_usage()
-        if r:
-            results.append(
-                f"RAM: {r['used_mb']}MB used of {r['total_mb']}MB "
-                f"({r['used_pct']}% used)"
-            )
-
-    if query in ("network", "connectivity", "all"):
-        n = _network()
-        if n["connected"]:
-            results.append(f"Network: connected via {n.get('interface')} ({n.get('ip')})")
-        else:
-            results.append("Network: no connectivity")
-
-    if query in ("gpio",):
-        g = _gpio_state()
-        if g:
-            results.append(f"GPIO state:\n{g}")
-        else:
-            results.append("GPIO: unable to read state")
-
-    if query in ("battery",):
-        b = _pisugur_battery()
-        if b:
-            results.append(f"Battery: {b}")
-        else:
-            results.append("Battery: PiSugar not yet connected")
+        fn = _QUERY_MAP.get(q)
+        if fn:
+            try:
+                result = fn()
+                if result:
+                    results.append(result)
+            except Exception as e:
+                results.append(f"{q}: error ({e})")
 
     return "\n".join(results) if results else "No information available for that query."
 
@@ -237,16 +231,20 @@ tools.register(
         "Use for: current date/time, CPU temperature, NVMe temperature, "
         "fan speed, CPU frequency and throttle status, disk space, RAM, "
         "network connectivity, uptime, GPIO state, or battery level. "
-        "Always call this for time/date questions instead of guessing."
+        "Always call this for time/date questions instead of guessing. "
+        "You can query multiple things at once by passing comma-separated values."
     ),
     parameters  = {
         "type": "object",
         "properties": {
             "query": {
                 "type": "string",
-                "description": "What to query",
-                "enum": ["datetime", "temperature", "fan", "cpu", "disk",
-                         "ram", "network", "uptime", "gpio", "battery", "all"]
+                "description": (
+                    "What to query. Single value or comma-separated list. "
+                    "Options: datetime, temperature, fan, cpu, disk, ram, "
+                    "network, uptime, gpio, battery, all. "
+                    "Example: 'fan,datetime' or 'all'"
+                )
             }
         },
         "required": []
