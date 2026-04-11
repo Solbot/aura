@@ -1,0 +1,38 @@
+[Unit]
+Description=Aura UI
+After=graphical.target
+Wants=graphical.target
+
+[Service]
+Type=simple
+User=aura
+WorkingDirectory=/home/aura/aura
+Environment="PATH=/home/aura/aura/venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PYTHONUNBUFFERED=1"
+Environment="KIVY_WINDOW=sdl2"
+Environment="KIVY_GL_BACKEND=sdl2"
+Environment="SDL_VIDEODRIVER=wayland"
+ExecStartPre=/bin/bash -c '\
+  XDG_RT=/run/user/$(id -u aura); \
+  for i in $(seq 1 15); do \
+    WD=$(ls ${XDG_RT}/wayland-* 2>/dev/null | grep -v lock | head -1); \
+    if [ -n "$WD" ]; then \
+      echo "WAYLAND_DISPLAY=$(basename $WD)" > /tmp/aura_wayland_env; \
+      exit 0; \
+    fi; \
+    sleep 1; \
+  done; \
+  echo "WAYLAND_DISPLAY=wayland-0" > /tmp/aura_wayland_env'
+ExecStart=/bin/bash -c '\
+  source /tmp/aura_wayland_env && \
+  export WAYLAND_DISPLAY && \
+  export XDG_RUNTIME_DIR=/run/user/$(id -u aura) && \
+  exec /home/aura/aura/venv/bin/python3 /home/aura/aura/ui.py'
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aura-ui
+
+[Install]
+WantedBy=graphical.target

@@ -10,10 +10,14 @@ import socket
 import threading
 import queue
 
+sys.path.insert(0, '/home/aura/aura')
+import db
+db.init_db()
+
 # Tell Kivy to use Wayland/SDL2
 os.environ.setdefault('KIVY_WINDOW', 'sdl2')
 os.environ.setdefault('KIVY_GL_BACKEND', 'sdl2')
-os.environ.setdefault('SDL_VIDEODRIVER', 'wayland')
+# os.environ.setdefault('SDL_VIDEODRIVER', 'wayland')
 
 from kivy.config import Config
 Config.set('graphics', 'fullscreen', 'auto')
@@ -156,7 +160,9 @@ class Tile(RelativeLayout):
 # --- Conversation tile ---
 class ConversationTile(Tile):
     def __init__(self, **kwargs):
-        super().__init__(title="Recent Chat History", **kwargs)
+        self._assistant_name = db.get('assistant_name') or 'Aura'
+        self._user_name      = db.get('user_informal_name') or 'You'
+        super().__init__(title=self._assistant_name, **kwargs)
         self._messages = []
         layout = BoxLayout(
             orientation="vertical",
@@ -179,8 +185,7 @@ class ConversationTile(Tile):
     def add_message(self, role, text):
         is_user = role == "user"
         color   = C_TEXT if not is_user else (0.85, 0.85, 1.0, 1)
-# TODO - Change "Aether" to users preferred AI Name
-        prefix  = "You: " if is_user else "Aether: "
+        prefix  = f"{self._user_name}: " if is_user else f"{self._assistant_name}: "
         lbl = Label(
             text=f"[b]{prefix}[/b]{text}" if is_user else text,
             markup=True,
@@ -290,17 +295,29 @@ class ConnectionTile(Tile):
         inner = BoxLayout(
             orientation="vertical",
             size_hint=(1, 1),
-            padding=[dp(8), dp(24), dp(8), dp(4)]
+            padding=[dp(8), dp(24), dp(8), dp(4)],
+            spacing=dp(4)
         )
         self._status_lbl = Label(
             text="Connecting...",
             font_size=sp(12),
             color=C_WARN,
-            size_hint=(1, 1),
+            size_hint=(1, 0.5),
             halign="center",
             valign="middle"
         )
+        self._sys_msg_lbl = Label(
+            text="",
+            font_size=sp(11),
+            color=C_TEXT_DIM,
+            size_hint=(1, 0.5),
+            halign="center",
+            valign="top",
+            italic=True
+        )
+        self._sys_msg_lbl.bind(size=self._sys_msg_lbl.setter('text_size'))
         inner.add_widget(self._status_lbl)
+        inner.add_widget(self._sys_msg_lbl)
         self.add_widget(inner)
 
     def set_connected(self, connected):
@@ -312,6 +329,15 @@ class ConnectionTile(Tile):
             self._status_lbl.text  = "Disconnected"
             self._status_lbl.color = C_ERROR
             self.set_color((0.18, 0.08, 0.08, 1))
+
+    def add_system_message(self, text, level="info"):
+        color_map = {
+            "info":    C_TEXT_DIM,
+            "warning": C_WARN,
+            "error":   C_ERROR,
+        }
+        self._sys_msg_lbl.text  = text
+        self._sys_msg_lbl.color = color_map.get(level, C_TEXT_DIM)
 
 # --- Input bar ---
 class InputBar(BoxLayout):
@@ -418,6 +444,10 @@ class AuraUI(App):
         )
         self._root.add_widget(self._input_bar)
 
+        # Wire OSK to the text input
+        self._vkbd.target = self._input_bar._input
+        self._vkbd.bind(on_key_up=self._on_vkbd_key)
+
         # Build tiles
         self._build_tiles()
 
@@ -507,6 +537,10 @@ class AuraUI(App):
             idx = self._root.children.index(self._input_bar)
             self._root.add_widget(self._vkbd, index=idx)
             self._vkbd_visible = True
+            self._input_bar._input.focus = True
+
+    def _on_vkbd_key(self, keyboard, keycode):
+        self._input_bar._input.focus = True
 
     def _on_socket_message(self, msg):
         msg_type = msg.get("type")
@@ -516,12 +550,15 @@ class AuraUI(App):
             self._conv_tile.set_status("Connected to Aura", C_ACCENT2)
         elif msg_type == "disconnected":
             self._conn_tile.set_connected(False)
-# TODO - Change "Aura" to users preferred AI Name
-            self._conv_tile.set_status("Aura disconnected — retrying...", C_WARN)
+            self._conn_tile.add_system_message("Aura disconnected — retrying...", "warning")
         elif msg_type == "chat_response":
             text = msg.get("text", "")
             if text:
                 self._conv_tile.add_message("aura", text)
+        elif msg_type == "system_message":
+            text  = msg.get("text", "")
+            level = msg.get("level", "info")
+            self._conn_tile.add_system_message(text, level)
         elif msg_type == "status_update":
             key   = msg.get("key", "")
             value = msg.get("value", "")

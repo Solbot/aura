@@ -32,6 +32,8 @@ SAMPLE_RATE  = 22050
 AUDIO_DEVICE = "default"
 
 def speak(text):
+    if db.get('audio_enabled') == '0':
+        return
     audio = b"".join(chunk.audio_int16_bytes for chunk in voice.synthesize(text))
     proc  = subprocess.Popen(
         ["aplay", "-q", "-f", "S16_LE", "-r", str(SAMPLE_RATE),
@@ -82,7 +84,7 @@ def build_system_prompt():
         "- You have NO external weather sensors. Never invent weather data.\n"
         "- When the user shares personal facts (birthday, family, job, preferences, "
         "important dates, hobbies): IMMEDIATELY call store_user_fact.\n"
-        "- Pass values exactly as the user says them ÃÂ¢ÃÂÃÂ the system will clean and normalise them.\n"
+        "- Pass values exactly as the user says them — the system will clean and normalise them.\n"
         "- Use get_user_facts when asked to recall something about the user.\n"
         "- Present tool results as exact values naturally in conversation."
     )
@@ -90,10 +92,6 @@ def build_system_prompt():
 ENDPOINT       = db.get('home_pc_endpoint') or "http://localhost:8080/v1/chat/completions"
 ASSISTANT_NAME = db.get('assistant_name')
 SYSTEM_PROMPT  = build_system_prompt()
-
-def confirm_fn(prompt):
-    response = input(prompt).strip().lower()
-    return response in ("yes", "y")
 
 def llm_call(messages, use_tools=True):
     """Call LLM with an explicit message list."""
@@ -105,20 +103,20 @@ def llm_call(messages, use_tools=True):
         r    = requests.post(ENDPOINT, json=payload, timeout=120)
         data = r.json()
         if "choices" not in data:
-            print(f"[LLM error: {str(data)[:200]}]")
+            aura_socket.send_system_message(f"LLM error: {str(data)[:200]}", level="error")
             return {"choices": [{"message": {
                 "content": "I had trouble processing that. Could you try again?",
                 "tool_calls": None
             }}]}
         return data
     except Exception as e:
-        print(f"[LLM error: {e}]")
+        aura_socket.send_system_message(f"LLM error: {e}", level="error")
         return {"choices": [{"message": {
             "content": "I'm having trouble connecting right now.",
             "tool_calls": None
         }}]}
 
-def chat(user_input, hot_memory_note=None):
+def chat(user_input, hot_memory_note=None, msg_id=None):
     global _csam_locked
 
     if hot_memory_note:
@@ -140,7 +138,6 @@ def chat(user_input, hot_memory_note=None):
                 break
 
             # Store the assistant tool-call message directly in hot memory
-            # (must preserve exact structure llama.cpp expects)
             memory.get_hot().append({
                 "role":       "assistant",
                 "content":    None,
@@ -155,7 +152,7 @@ def chat(user_input, hot_memory_note=None):
                     fn_args = json.loads(tc["function"]["arguments"])
                 except Exception:
                     fn_args = {}
-                success, result = tools.execute(fn_name, fn_args, confirm_fn)
+                success, result = tools.execute(fn_name, fn_args, lambda p: True)
                 tool_results.append(result)
                 memory.get_hot().append({
                     "role":         "tool",
@@ -175,7 +172,7 @@ def chat(user_input, hot_memory_note=None):
             message   = data2["choices"][0]["message"]
             reply     = message.get("content") or ""
 
-            # Remove the tool instruction from hot ÃÂ¢ÃÂÃÂ it was scaffolding
+            # Remove the tool instruction from hot — it was scaffolding
             hot = memory.get_hot()
             if hot and hot[-1].get("content") == instruction:
                 hot.pop()
@@ -194,7 +191,7 @@ def chat(user_input, hot_memory_note=None):
             trigger_input = user_input,
             location      = db.get('location'),
             speak_fn      = speak,
-            print_fn      = lambda m: print(f"\n{ASSISTANT_NAME}: {m}")
+            print_fn      = lambda m: aura_socket.send_system_message(m, level="warning")
         )
         return None
 
@@ -205,46 +202,44 @@ def chat(user_input, hot_memory_note=None):
     return reply
 
 
-print(f"\n{ASSISTANT_NAME} is online. Type 'quit' to exit.")
+aura_socket.send_system_message(f"{ASSISTANT_NAME} is online.", level="info")
+
 while True:
     immediate = awareness.get_immediate_message()
     if immediate:
         msg = immediate["message"]
-        print(f"\n{ASSISTANT_NAME}: {msg}")
+        aura_socket.send_chat_response(msg)
         speak(msg)
         memory.add_message("assistant", msg)
         continue
 
-    # Check for incoming socket messages (non-blocking)
-    socket_msg = aura_socket.get_incoming(block=False)
-    if socket_msg:
-        msg_type = socket_msg.get("type")
-        if msg_type == "chat_input":
-            user_input = socket_msg.get("text", "").strip()
-            msg_id     = socket_msg.get("id")
-            if user_input:
-                db.touch_interaction()
-                hot_note = awareness.get_hot_memory_note()
-                reply    = chat(user_input, hot_memory_note=hot_note)
-                if reply:
-                    aura_socket.send_chat_response(reply, msg_id)
+    socket_msg = aura_socket.get_incoming(block=True, timeout=0.2)
+    if socket_msg is None:
         continue
 
-    user_input = input(f"\nYou: ").strip()
-    if user_input.lower() == "quit":
+    msg_type = socket_msg.get("type")
+
+    if msg_type == "shutdown":
+        aura_socket.send_system_message("Aura shutting down.", level="info")
         awareness.stop()
         aura_socket.stop()
         break
 
-    # Check for debug commands first
-    cmd_result = commands.handle(user_input, SYSTEM_PROMPT, ASSISTANT_NAME)
-    if cmd_result is not None:
-        print(cmd_result)
-        continue
+    if msg_type == "chat_input":
+        user_input = socket_msg.get("text", "").strip()
+        msg_id     = socket_msg.get("id")
+        if not user_input:
+            continue
 
-    db.touch_interaction()
-    hot_note = awareness.get_hot_memory_note()
-    reply    = chat(user_input, hot_memory_note=hot_note)
-    if reply:
-        print(f"\n{ASSISTANT_NAME}: {reply}")
-        speak(reply)
+        # Check for debug commands first
+        cmd_result = commands.handle(user_input, SYSTEM_PROMPT, ASSISTANT_NAME)
+        if cmd_result is not None:
+            aura_socket.send_chat_response(cmd_result, msg_id)
+            continue
+
+        db.touch_interaction()
+        hot_note = awareness.get_hot_memory_note()
+        reply    = chat(user_input, hot_memory_note=hot_note, msg_id=msg_id)
+        if reply:
+            aura_socket.send_chat_response(reply, msg_id)
+            speak(reply)

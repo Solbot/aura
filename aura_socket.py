@@ -166,6 +166,12 @@ def send_status(key, value):
     """Send a status update to the UI."""
     send({"type": "status_update", "key": key, "value": value})
 
+def send_system_message(text, level="info"):
+    """Send a system/status message to all UI clients.
+    level: 'info' | 'warning' | 'error'
+    """
+    send({"type": "system_message", "text": text, "level": level})
+
 def query_ui(filter_dict=None, timeout=3.0):
     """
     Send a ui_query to the UI and wait for the response.

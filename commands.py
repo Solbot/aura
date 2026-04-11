@@ -34,6 +34,7 @@ def handle(user_input, system_prompt, assistant_name):
             "  /clear hot         Clear hot context (keeps system prompt)\n"
             "  /set key value     Set a config value\n"
             "  /config            Show all config settings\n"
+            "  /audio on|off      Toggle TTS audio output (persistent)\n"
         )
 
     if cmd == "/status":
@@ -171,5 +172,19 @@ def handle(user_input, system_prompt, assistant_name):
         for k, v, desc in rows:
             lines.append(f"  {k:<30} = {v}  ({desc})")
         return "\n".join(lines) + "\n"
+
+    if cmd == "/audio":
+        if not args:
+            current = db.get('audio_enabled')
+            state = "on" if current == '1' else "off"
+            return f"\n[Audio is currently {state}. Use /audio on or /audio off]\n"
+        setting = args[0].lower()
+        if setting == "on":
+            db.set('audio_enabled', '1')
+            return "\n[Audio enabled]\n"
+        elif setting == "off":
+            db.set('audio_enabled', '0')
+            return "\n[Audio disabled]\n"
+        return "\n[Usage: /audio on | /audio off]\n"
 
     return f"\n[Unknown command: {cmd}. Type /help for commands]\n"
