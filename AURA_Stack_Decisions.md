@@ -10,11 +10,11 @@
 | Core | Raspberry Pi 5 16GB | Primary device |
 | Storage | Silicon Power P34A60 256GB NVMe M.2 2280 | SM2263XT controller, verified Pi 5 compatible |
 | NVMe HAT | Freenove M.2 NVMe Adapter V2 | PCIe 2.0/3.0, supports 2230/2242/2260/2280 |
-| Display | 10" touchscreen 1024x600 | Status display, notes, mud maps |
+| Display | 10" touchscreen 1024x600 | Status display, notes, apps |
 | Audio Out | Built into touchscreen | |
 | Audio In | TBD — ReSpeaker array recommended | Backburnered until base system working |
 | Power | SugarPi 3 | Portable power |
-| Case | TBD | Later |
+| Case | Custom design - 3D printed | Later |
 
 ---
 
@@ -115,7 +115,7 @@ Nothing is ever deleted without explicit user instruction (cold archive is perma
 - Never manipulates or fosters unhealthy dependence
 - User data stays local always
 - Transparent about being an AI if sincerely asked
-- Session logging of violations for developer reference only
+- Session logging of violations for developer reference
 
 ---
 
@@ -184,7 +184,7 @@ All commands start with `/` and are intercepted before reaching the LLM (instant
 | `dream.py` | Sleep/dream memory consolidation cycle |
 | `awareness.py` | Background thread: reminders, thermal, dream trigger, busy lock |
 | `commands.py` | Debug/utility slash commands |
-| `csam.py` | Hardcoded CSAM safety — inever configurable |
+| `csam.py` | Hardcoded CSAM safety — never configurable |
 | `first_boot.py` | First-date conversation, populates config |
 | `tools/__init__.py` | Tool registry with FREE/CONFIRM/LOCKED tiers |
 | `tools/system_info.py` | Pi sensor tool (date/time, temp, fan, disk, RAM, network) |
@@ -224,4 +224,4 @@ All commands start with `/` and are intercepted before reaching the LLM (instant
 
 ---
 
-*Project started: April 10, 2026 — Dazz's 52nd birthday*
+*Project started: April 10, 2026*
