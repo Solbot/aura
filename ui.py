@@ -35,7 +35,7 @@ from kivy.uix.button import Button
 from kivy.uix.vkeyboard import VKeyboard
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.relativelayout import RelativeLayout
-from kivy.graphics import Color, Rectangle, RoundedRectangle, Line
+from kivy.graphics import Color, Rectangle, RoundedRectangle, Line, Triangle
 from kivy.clock import Clock
 from kivy.metrics import dp, sp
 from kivy.core.window import Window
@@ -55,6 +55,20 @@ C_INPUT_BG  = (0.10, 0.10, 0.16, 1)   # Input background
 C_BAR_BG    = (0.06, 0.06, 0.10, 1)   # Bottom bar background
 
 SOCKET_PATH = "/tmp/aura.sock"
+
+# --- Layout persistence ---
+LAYOUT_PATH        = os.path.expanduser("~/aura/layout.json")
+TILE_ORDER_DEFAULT = ["conversation", "connection", "clock", "cpu_temp", "memory"]
+TILE_HEIGHT_DEFAULT = {
+    "conversation": 320,
+    "connection":   120,
+    "clock":        120,
+    "cpu_temp":     120,
+    "memory":       120,
+}
+TILE_HEIGHT_MIN_DP  = 80
+TILE_HEIGHT_MAX_DP  = 480
+TILE_HEIGHT_STEP_DP = 60
 
 # --- Socket client ---
 class SocketClient:
@@ -123,16 +137,57 @@ class SocketClient:
             import time
             time.sleep(2)
 
+# --- Drag ghost ---
+class DragGhost(RelativeLayout):
+    """Semi-transparent drag proxy that follows touch."""
+    def __init__(self, label_text="", **kwargs):
+        super().__init__(**kwargs)
+        with self.canvas.before:
+            Color(0.18, 0.18, 0.28, 0.82)
+            self._bg = RoundedRectangle(pos=(0, 0), size=self.size, radius=[dp(8)])
+        self.bind(size=lambda *a: setattr(self._bg, 'size', self.size))
+        if label_text:
+            self.add_widget(Label(
+                text=label_text.upper(),
+                font_size=sp(12),
+                color=C_TEXT,
+                bold=True,
+                size_hint=(1, 1),
+                halign='center',
+                valign='middle'
+            ))
+
 # --- Tile base ---
 class Tile(RelativeLayout):
     def __init__(self, title="", **kwargs):
         super().__init__(**kwargs)
-        self.title = title
+        self.tile_id   = ""
+        self.title     = title
         self._bg_color = list(C_TILE)
+
+        # Long-press / drag state
+        self._lp_trigger  = None
+        self._lp_touch_id = None
+        self._lp_start_x  = 0
+        self._lp_start_y  = 0
+
+        # Resize state
+        self._resize_active   = False
+        self._resize_touch_id = None
+        self._resize_start_y  = 0
+        self._resize_start_h  = 0
+
         with self.canvas.before:
             self._color_inst = Color(*self._bg_color)
-            self._rect = RoundedRectangle(pos=(0,0), size=self.size, radius=[dp(8)])
+            self._rect = RoundedRectangle(pos=(0, 0), size=self.size, radius=[dp(8)])
         self.bind(size=self._update_rect, pos=self._update_rect)
+
+        # Resize handle: small triangle in bottom-right corner (canvas.after so it's on top)
+        with self.canvas.after:
+            self._handle_color = Color(0.35, 0.35, 0.55, 1)
+            self._handle_tri   = Triangle(points=self._handle_points())
+        self.bind(size=self._update_handle)
+
         # Title label
         if title:
             self._title_lbl = Label(
@@ -153,9 +208,101 @@ class Tile(RelativeLayout):
         self._rect.pos  = (0, 0)
         self._rect.size = self.size
 
+    def _handle_points(self):
+        w  = self.width
+        hw = dp(20)
+        # Bottom-right triangle in local coords (y=0 is bottom in Kivy)
+        return [w - hw, 0,  w, 0,  w, hw]
+
+    def _update_handle(self, *a):
+        self._handle_tri.points = self._handle_points()
+
     def set_color(self, color):
         self._bg_color = list(color)
         self._color_inst.rgba = color
+
+    def _in_handle(self, touch):
+        """Check if touch falls within the resize handle region."""
+        wx, wy = self.to_window(0, 0)
+        lx = touch.x - wx
+        ly = touch.y - wy
+        return lx >= self.width - dp(20) and ly <= dp(20)
+
+    def on_touch_down(self, touch):
+        if not self.collide_point(*touch.pos):
+            return super().on_touch_down(touch)
+
+        # Resize handle takes priority — grab and consume
+        if self._in_handle(touch):
+            self._resize_active   = True
+            self._resize_touch_id = touch.uid
+            self._resize_start_y  = touch.y
+            self._resize_start_h  = self.height
+            touch.grab(self)
+            return True
+
+        # Schedule long-press for drag; still dispatch to children for scroll
+        self._lp_touch_id = touch.uid
+        self._lp_start_x  = touch.x
+        self._lp_start_y  = touch.y
+        self._lp_trigger  = Clock.schedule_once(
+            lambda dt: self._fire_long_press(touch), 0.6
+        )
+        return super().on_touch_down(touch)
+
+    def _fire_long_press(self, touch):
+        self._lp_trigger = None
+        # Abort if touch already ended
+        if getattr(touch, 'time_end', 0) > 0:
+            return
+        # Abort if touch moved too far (scroll gesture)
+        if (abs(touch.x - self._lp_start_x) > dp(10) or
+                abs(touch.y - self._lp_start_y) > dp(10)):
+            return
+        app = App.get_running_app()
+        if app:
+            touch.grab(self)
+            app._start_drag(self, touch)
+
+    def on_touch_move(self, touch):
+        if touch.grab_current is self:
+            if self._resize_active and touch.uid == self._resize_touch_id:
+                dy     = touch.y - self._resize_start_y
+                new_h  = self._resize_start_h - dy  # drag down = smaller
+                step   = dp(TILE_HEIGHT_STEP_DP)
+                min_h  = dp(TILE_HEIGHT_MIN_DP)
+                max_h  = dp(TILE_HEIGHT_MAX_DP)
+                steps  = round((new_h - min_h) / step)
+                snapped = min_h + steps * step
+                self.height = max(min_h, min(max_h, snapped))
+                return True
+            app = App.get_running_app()
+            if app and getattr(app, '_dragging', None) is self:
+                app._update_drag(touch)
+                return True
+        return super().on_touch_move(touch)
+
+    def on_touch_up(self, touch):
+        if touch.grab_current is self:
+            if self._resize_active and touch.uid == self._resize_touch_id:
+                self._resize_active = False
+                touch.ungrab(self)
+                app = App.get_running_app()
+                if app:
+                    app._save_layout()
+                return True
+            app = App.get_running_app()
+            if app and getattr(app, '_dragging', None) is self:
+                touch.ungrab(self)
+                app._end_drag(touch)
+                return True
+            touch.ungrab(self)
+            return False
+        # Cancel pending long-press on normal touch-up (non-grabbed)
+        if self._lp_trigger and touch.uid == self._lp_touch_id:
+            self._lp_trigger.cancel()
+            self._lp_trigger = None
+        return super().on_touch_up(touch)
 
 # --- Conversation tile ---
 class ConversationTile(Tile):
@@ -415,6 +562,12 @@ class AuraUI(App):
         self._kbd_visible = False
         self._msg_id      = 0
 
+        # Drag state
+        self._dragging            = None
+        self._drag_ghost          = None
+        self._drag_ghost_offset_x = 0
+        self._drag_ghost_offset_y = 0
+
         # Root layout
         self._root = BoxLayout(orientation="vertical")
 
@@ -445,8 +598,7 @@ class AuraUI(App):
         )
         self._root.add_widget(self._input_bar)
 
-        # Wire OSK to the text input
-        self._vkbd.target = self._input_bar._input
+        # Wire OSK key events (no target — we handle insertion manually)
         self._vkbd.bind(on_key_up=self._on_vkbd_key)
 
         # Build tiles
@@ -465,40 +617,140 @@ class AuraUI(App):
 
     def _build_tiles(self):
         self._grid.clear_widgets()
+        order, heights = self._load_layout()
 
-        # Conversation tile — spans full width (col span via size)
-        self._conv_tile = ConversationTile(
-            size_hint=(1, None),
-            height=dp(320)
-        )
-        self._conn_tile = ConnectionTile(
-            size_hint=(1, None),
-            height=dp(120)
-        )
-        self._clock_tile = ClockTile(
-            size_hint=(1, None),
-            height=dp(120)
-        )
+        def _h(tile_id):
+            saved = heights.get(tile_id)
+            if saved is not None:
+                return int(saved)
+            return dp(TILE_HEIGHT_DEFAULT[tile_id])
+
+        self._conv_tile = ConversationTile(size_hint=(1, None), height=_h("conversation"))
+        self._conv_tile.tile_id = "conversation"
+
+        self._conn_tile = ConnectionTile(size_hint=(1, None), height=_h("connection"))
+        self._conn_tile.tile_id = "connection"
+
+        self._clock_tile = ClockTile(size_hint=(1, None), height=_h("clock"))
+        self._clock_tile.tile_id = "clock"
+
         self._cpu_tile = StatusTile(
-            title="CPU Temp",
-            key="cpu_temp",
-            unit="°C",
-            size_hint=(1, None),
-            height=dp(120)
+            title="CPU Temp", key="cpu_temp", unit="°C",
+            size_hint=(1, None), height=_h("cpu_temp")
         )
-        self._mem_tile = StatusTile(
-            title="Memory",
-            key="memory",
-            unit="MB used",
-            size_hint=(1, None),
-            height=dp(120)
-        )
+        self._cpu_tile.tile_id = "cpu_temp"
 
-        self._grid.add_widget(self._conv_tile)
-        self._grid.add_widget(self._conn_tile)
-        self._grid.add_widget(self._clock_tile)
-        self._grid.add_widget(self._cpu_tile)
-        self._grid.add_widget(self._mem_tile)
+        self._mem_tile = StatusTile(
+            title="Memory", key="memory", unit="MB used",
+            size_hint=(1, None), height=_h("memory")
+        )
+        self._mem_tile.tile_id = "memory"
+
+        tile_map = {
+            "conversation": self._conv_tile,
+            "connection":   self._conn_tile,
+            "clock":        self._clock_tile,
+            "cpu_temp":     self._cpu_tile,
+            "memory":       self._mem_tile,
+        }
+
+        added = set()
+        for tid in order:
+            if tid in tile_map:
+                self._grid.add_widget(tile_map[tid])
+                added.add(tid)
+        # Add any tiles missing from saved order
+        for tid, tile in tile_map.items():
+            if tid not in added:
+                self._grid.add_widget(tile)
+
+    # --- Layout persistence ---
+
+    def _save_layout(self):
+        tiles   = list(reversed(self._grid.children))  # display order
+        order   = [getattr(t, 'tile_id', '') for t in tiles]
+        heights = {
+            getattr(t, 'tile_id', ''): int(t.height)
+            for t in tiles if getattr(t, 'tile_id', '')
+        }
+        try:
+            with open(LAYOUT_PATH, 'w') as f:
+                json.dump({"order": order, "heights": heights}, f, indent=2)
+        except Exception:
+            pass
+
+    def _load_layout(self):
+        try:
+            with open(LAYOUT_PATH) as f:
+                data = json.load(f)
+            order   = data.get("order", list(TILE_ORDER_DEFAULT))
+            heights = data.get("heights", {})
+            return order, heights
+        except Exception:
+            return list(TILE_ORDER_DEFAULT), {}
+
+    # --- Drag and drop ---
+
+    def _start_drag(self, tile, touch):
+        self._dragging = tile
+        tile.set_color(C_TILE_HL)
+        wx, wy = tile.to_window(0, 0)
+        self._drag_ghost = DragGhost(
+            label_text=tile.title,
+            size_hint=(None, None),
+            size=(tile.width, tile.height),
+            pos=(wx, wy)
+        )
+        # Center ghost under finger
+        self._drag_ghost_offset_x = tile.width  / 2
+        self._drag_ghost_offset_y = tile.height / 2
+        Window.add_widget(self._drag_ghost)
+
+    def _update_drag(self, touch):
+        if self._drag_ghost:
+            self._drag_ghost.x = touch.x - self._drag_ghost_offset_x
+            self._drag_ghost.y = touch.y - self._drag_ghost_offset_y
+
+    def _end_drag(self, touch):
+        tile  = self._dragging
+        ghost = self._drag_ghost
+
+        if ghost:
+            ghost_cx = ghost.x + ghost.width  / 2
+            ghost_cy = ghost.y + ghost.height / 2
+            best_tile = None
+            best_dist = float('inf')
+            for t in list(self._grid.children):
+                if t is tile:
+                    continue
+                tx, ty = t.to_window(t.width / 2, t.height / 2)
+                dist = ((tx - ghost_cx) ** 2 + (ty - ghost_cy) ** 2) ** 0.5
+                if dist < best_dist:
+                    best_dist = dist
+                    best_tile = t
+            if best_tile:
+                self._swap_tiles(tile, best_tile)
+            Window.remove_widget(ghost)
+            self._drag_ghost = None
+
+        if tile:
+            tile.set_color(C_TILE)
+        self._dragging = None
+        self._save_layout()
+
+    def _swap_tiles(self, tile_a, tile_b):
+        tiles = list(reversed(self._grid.children))  # display order
+        try:
+            i = tiles.index(tile_a)
+            j = tiles.index(tile_b)
+        except ValueError:
+            return
+        tiles[i], tiles[j] = tiles[j], tiles[i]
+        self._grid.clear_widgets()
+        for t in tiles:
+            self._grid.add_widget(t)
+
+    # --- Grid layout ---
 
     def _update_cols(self, *a):
         w = Window.width
@@ -511,6 +763,8 @@ class AuraUI(App):
 
     def _on_resize(self, win, w, h):
         self._update_cols()
+
+    # --- Input ---
 
     def _on_send(self, text):
         text = text.strip()
@@ -526,7 +780,6 @@ class AuraUI(App):
                 "id":   str(self._msg_id)
             })
         else:
-# TODO - Change "Aura" to users preferred AI Name
             self._conv_tile.set_status("Not connected to Aura", C_ERROR)
 
     def _toggle_keyboard(self):
@@ -541,13 +794,21 @@ class AuraUI(App):
             self._input_bar._input.focus = True
 
     def _on_vkbd_key(self, keyboard, keycode, text, modifiers):
-        self._input_bar._input.focus = True
+        ti = self._input_bar._input
+        ti.focus = True
+        if text and text not in ('\n', '\r', '\t'):
+            ti.insert_text(text)
+        elif keycode == 'backspace':
+            ti.do_backspace()
+        elif keycode in ('enter', 'return'):
+            self._on_send(ti.text)
+
+    # --- Socket messages ---
 
     def _on_socket_message(self, msg):
         msg_type = msg.get("type")
         if msg_type == "connected":
             self._conn_tile.set_connected(True)
-# TODO - Change "Aura" to users preferred AI Name
             self._conv_tile.set_status("Connected to Aura", C_ACCENT2)
         elif msg_type == "disconnected":
             self._conn_tile.set_connected(False)
@@ -564,8 +825,8 @@ class AuraUI(App):
             key   = msg.get("key", "")
             value = msg.get("value", "")
             if key == "cpu_temp":
-                warn  = float(value) > 70 if value.replace('.','').isdigit() else False
-                error = float(value) > 80 if value.replace('.','').isdigit() else False
+                warn  = float(value) > 70 if value.replace('.', '').isdigit() else False
+                error = float(value) > 80 if value.replace('.', '').isdigit() else False
                 self._cpu_tile.update(value, warn=warn, error=error)
             elif key == "memory":
                 self._mem_tile.update(value)
