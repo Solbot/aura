@@ -252,33 +252,30 @@ class Tile(RelativeLayout):
 
     def _fire_long_press(self, touch):
         self._lp_trigger = None
-        # Abort if touch already ended
-        if getattr(touch, 'time_end', 0) > 0:
+        # Abort if touch already ended (time_end is -1 while active, >0 when ended)
+        if getattr(touch, 'time_end', -1) > 0:
             return
         # Abort if touch moved too far (scroll gesture)
-        if (abs(touch.x - self._lp_start_x) > dp(10) or
-                abs(touch.y - self._lp_start_y) > dp(10)):
+        if (abs(touch.x - self._lp_start_x) > dp(12) or
+                abs(touch.y - self._lp_start_y) > dp(12)):
             return
         app = App.get_running_app()
         if app:
-            touch.grab(self)
+            # Don't grab here (Clock callback, ScrollView may hold the grab).
+            # App-level Window handlers track the touch uid instead.
             app._start_drag(self, touch)
 
     def on_touch_move(self, touch):
         if touch.grab_current is self:
             if self._resize_active and touch.uid == self._resize_touch_id:
-                dy     = touch.y - self._resize_start_y
-                new_h  = self._resize_start_h - dy  # drag down = smaller
-                step   = dp(TILE_HEIGHT_STEP_DP)
-                min_h  = dp(TILE_HEIGHT_MIN_DP)
-                max_h  = dp(TILE_HEIGHT_MAX_DP)
-                steps  = round((new_h - min_h) / step)
+                dy      = touch.y - self._resize_start_y
+                new_h   = self._resize_start_h - dy  # drag down = smaller
+                step    = dp(TILE_HEIGHT_STEP_DP)
+                min_h   = dp(TILE_HEIGHT_MIN_DP)
+                max_h   = dp(TILE_HEIGHT_MAX_DP)
+                steps   = round((new_h - min_h) / step)
                 snapped = min_h + steps * step
                 self.height = max(min_h, min(max_h, snapped))
-                return True
-            app = App.get_running_app()
-            if app and getattr(app, '_dragging', None) is self:
-                app._update_drag(touch)
                 return True
         return super().on_touch_move(touch)
 
@@ -290,11 +287,6 @@ class Tile(RelativeLayout):
                 app = App.get_running_app()
                 if app:
                     app._save_layout()
-                return True
-            app = App.get_running_app()
-            if app and getattr(app, '_dragging', None) is self:
-                touch.ungrab(self)
-                app._end_drag(touch)
                 return True
             touch.ungrab(self)
             return False
@@ -567,6 +559,7 @@ class AuraUI(App):
         self._drag_ghost          = None
         self._drag_ghost_offset_x = 0
         self._drag_ghost_offset_y = 0
+        self._drag_touch_uid      = None
 
         # Root layout
         self._root = BoxLayout(orientation="vertical")
@@ -604,11 +597,16 @@ class AuraUI(App):
         # Build tiles
         self._build_tiles()
 
-        # Bind window resize
+        # Bind window resize and drag tracking
         Window.bind(on_resize=self._on_resize)
+        Window.bind(on_touch_move=self._window_touch_move)
+        Window.bind(on_touch_up=self._window_touch_up)
 
         # Start socket
         self._socket.start()
+
+        # Poll system stats every second
+        Clock.schedule_interval(self._poll_system_stats, 1.0)
 
         # Update grid columns on start
         Clock.schedule_once(lambda dt: self._update_cols(), 0.1)
@@ -692,7 +690,8 @@ class AuraUI(App):
     # --- Drag and drop ---
 
     def _start_drag(self, tile, touch):
-        self._dragging = tile
+        self._dragging       = tile
+        self._drag_touch_uid = touch.uid
         tile.set_color(C_TILE_HL)
         wx, wy = tile.to_window(0, 0)
         self._drag_ghost = DragGhost(
@@ -701,15 +700,25 @@ class AuraUI(App):
             size=(tile.width, tile.height),
             pos=(wx, wy)
         )
-        # Center ghost under finger
-        self._drag_ghost_offset_x = tile.width  / 2
-        self._drag_ghost_offset_y = tile.height / 2
+        # Offset so ghost centre tracks the finger
+        self._drag_ghost_offset_x = touch.x - wx
+        self._drag_ghost_offset_y = touch.y - wy
         Window.add_widget(self._drag_ghost)
 
     def _update_drag(self, touch):
         if self._drag_ghost:
-            self._drag_ghost.x = touch.x - self._drag_ghost_offset_x
-            self._drag_ghost.y = touch.y - self._drag_ghost_offset_y
+            self._drag_ghost.pos = (
+                touch.x - self._drag_ghost_offset_x,
+                touch.y - self._drag_ghost_offset_y,
+            )
+
+    def _window_touch_move(self, window, touch):
+        if self._dragging and touch.uid == self._drag_touch_uid:
+            self._update_drag(touch)
+
+    def _window_touch_up(self, window, touch):
+        if self._dragging and touch.uid == self._drag_touch_uid:
+            self._end_drag(touch)
 
     def _end_drag(self, touch):
         tile  = self._dragging
@@ -735,7 +744,8 @@ class AuraUI(App):
 
         if tile:
             tile.set_color(C_TILE)
-        self._dragging = None
+        self._dragging       = None
+        self._drag_touch_uid = None
         self._save_layout()
 
     def _swap_tiles(self, tile_a, tile_b):
@@ -749,6 +759,26 @@ class AuraUI(App):
         self._grid.clear_widgets()
         for t in tiles:
             self._grid.add_widget(t)
+
+    # --- System stats polling ---
+
+    def _poll_system_stats(self, dt):
+        # CPU temp from sysfs
+        try:
+            with open('/sys/class/thermal/thermal_zone0/temp') as f:
+                temp = int(f.read().strip()) / 1000.0
+            warn  = temp > 70
+            error = temp > 80
+            self._cpu_tile.update(f"{temp:.1f}", warn=warn, error=error)
+        except Exception:
+            pass
+        # Memory via psutil
+        try:
+            import psutil
+            mem = psutil.virtual_memory()
+            self._mem_tile.update(str(int(mem.used / 1024 / 1024)))
+        except Exception:
+            pass
 
     # --- Grid layout ---
 
@@ -771,6 +801,7 @@ class AuraUI(App):
         if not text:
             return
         self._input_bar.clear()
+        Clock.schedule_once(lambda dt: setattr(self._input_bar._input, 'focus', True), 0.1)
         self._conv_tile.add_message("user", text)
         if self._socket.connected:
             self._msg_id += 1
@@ -791,6 +822,9 @@ class AuraUI(App):
             idx = self._root.children.index(self._input_bar)
             self._root.add_widget(self._vkbd, index=idx)
             self._vkbd_visible = True
+            # Force full width — VKeyboard doesn't always respect size_hint after add
+            self._vkbd.size_hint_x = 1
+            self._vkbd.width = Window.width
             self._input_bar._input.focus = True
 
     def _on_vkbd_key(self, keyboard, keycode, text, modifiers):
