@@ -7,6 +7,7 @@ import threading
 import queue
 import time
 import db
+import aura_socket
 from datetime import datetime
 
 # Message types
@@ -46,15 +47,23 @@ def _is_quiet_hours():
     except Exception:
         return False
 
+def _get_cpu_temp():
+    try:
+        with open("/sys/class/thermal/thermal_zone0/temp") as f:
+            return int(f.read().strip()) / 1000
+    except Exception:
+        return None
+
 def _check_temperature():
     try:
         threshold = float(db.get("critical_temp_threshold") or "80")
-        with open("/sys/class/thermal/thermal_zone0/temp") as f:
-            temp = int(f.read().strip()) / 1000
+        temp = _get_cpu_temp()
+        if temp is None:
+            return
         if temp >= threshold:
             immediate_queue.put({
                 "type":    IMMEDIATE,
-                "message": f"Warning Ã¢ÂÂ I'm running hot. My CPU temperature is {temp}ÃÂ°C. "
+                "message": f"Warning — I'm running hot. My CPU temperature is {temp}°C. "
                            f"You may want to check my cooling.",
                 "source":  "thermal"
             })
@@ -145,6 +154,23 @@ def _awareness_loop():
         # Always check reminders and temperature
         _check_reminders()
         _check_temperature()
+
+        # Push status to UI
+        try:
+            import psutil
+            mem = psutil.virtual_memory()
+            mem_used_mb = int(mem.used / 1024 / 1024)
+            aura_socket.send_status("memory", str(mem_used_mb))
+        except Exception:
+            pass
+
+        try:
+            temp = _get_cpu_temp()
+            if temp is not None:
+                aura_socket.send_status("cpu_temp", f"{temp:.1f}")
+        except Exception:
+            pass
+
         _check_dream()
 
         if not _is_quiet_hours():
