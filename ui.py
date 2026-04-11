@@ -324,6 +324,7 @@ class ConnectionTile(Tile):
         if connected:
             self._status_lbl.text  = "Connected"
             self._status_lbl.color = C_ACCENT2
+            self._sys_msg_lbl.text = ""
             self.set_color(C_TILE)
         else:
             self._status_lbl.text  = "Disconnected"
@@ -539,7 +540,7 @@ class AuraUI(App):
             self._vkbd_visible = True
             self._input_bar._input.focus = True
 
-    def _on_vkbd_key(self, keyboard, keycode):
+    def _on_vkbd_key(self, keyboard, keycode, text, modifiers):
         self._input_bar._input.focus = True
 
     def _on_socket_message(self, msg):
