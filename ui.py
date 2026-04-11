@@ -156,7 +156,7 @@ class Tile(RelativeLayout):
 # --- Conversation tile ---
 class ConversationTile(Tile):
     def __init__(self, **kwargs):
-        super().__init__(title="Aether", **kwargs)
+        super().__init__(title="Recent Chat History", **kwargs)
         self._messages = []
         layout = BoxLayout(
             orientation="vertical",
@@ -179,6 +179,7 @@ class ConversationTile(Tile):
     def add_message(self, role, text):
         is_user = role == "user"
         color   = C_TEXT if not is_user else (0.85, 0.85, 1.0, 1)
+# TODO - Change "Aether" to users preferred AI Name
         prefix  = "You: " if is_user else "Aether: "
         lbl = Label(
             text=f"[b]{prefix}[/b]{text}" if is_user else text,
@@ -494,6 +495,7 @@ class AuraUI(App):
                 "id":   str(self._msg_id)
             })
         else:
+# TODO - Change "Aura" to users preferred AI Name
             self._conv_tile.set_status("Not connected to Aura", C_ERROR)
 
     def _toggle_keyboard(self):
@@ -510,9 +512,11 @@ class AuraUI(App):
         msg_type = msg.get("type")
         if msg_type == "connected":
             self._conn_tile.set_connected(True)
+# TODO - Change "Aura" to users preferred AI Name
             self._conv_tile.set_status("Connected to Aura", C_ACCENT2)
         elif msg_type == "disconnected":
             self._conn_tile.set_connected(False)
+# TODO - Change "Aura" to users preferred AI Name
             self._conv_tile.set_status("Aura disconnected — retrying...", C_WARN)
         elif msg_type == "chat_response":
             text = msg.get("text", "")
