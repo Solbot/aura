@@ -165,12 +165,6 @@ class Tile(RelativeLayout):
         self.title     = title
         self._bg_color = list(C_TILE)
 
-        # Long-press / drag state
-        self._lp_trigger  = None
-        self._lp_touch_id = None
-        self._lp_start_x  = 0
-        self._lp_start_y  = 0
-
         # Resize state
         self._resize_active   = False
         self._resize_touch_id = None
@@ -241,29 +235,7 @@ class Tile(RelativeLayout):
             touch.grab(self)
             return True
 
-        # Schedule long-press for drag; still dispatch to children for scroll
-        self._lp_touch_id = touch.uid
-        self._lp_start_x  = touch.x
-        self._lp_start_y  = touch.y
-        self._lp_trigger  = Clock.schedule_once(
-            lambda dt: self._fire_long_press(touch), 0.6
-        )
         return super().on_touch_down(touch)
-
-    def _fire_long_press(self, touch):
-        self._lp_trigger = None
-        # Abort if touch already ended (time_end is -1 while active, >0 when ended)
-        if getattr(touch, 'time_end', -1) > 0:
-            return
-        # Abort if touch moved too far (scroll gesture)
-        if (abs(touch.x - self._lp_start_x) > dp(12) or
-                abs(touch.y - self._lp_start_y) > dp(12)):
-            return
-        app = App.get_running_app()
-        if app:
-            # Don't grab here (Clock callback, ScrollView may hold the grab).
-            # App-level Window handlers track the touch uid instead.
-            app._start_drag(self, touch)
 
     def on_touch_move(self, touch):
         if touch.grab_current is self:
@@ -290,10 +262,6 @@ class Tile(RelativeLayout):
                 return True
             touch.ungrab(self)
             return False
-        # Cancel pending long-press on normal touch-up (non-grabbed)
-        if self._lp_trigger and touch.uid == self._lp_touch_id:
-            self._lp_trigger.cancel()
-            self._lp_trigger = None
         return super().on_touch_up(touch)
 
 # --- Conversation tile ---
@@ -560,6 +528,10 @@ class AuraUI(App):
         self._drag_ghost_offset_x = 0
         self._drag_ghost_offset_y = 0
         self._drag_touch_uid      = None
+        # Long-press state (Window-level detection — avoids ScrollView grab races)
+        self._lp_sched            = None
+        self._lp_touch_uid        = None
+        self._lp_start_pos        = (0, 0)
 
         # Root layout
         self._root = BoxLayout(orientation="vertical")
@@ -599,8 +571,9 @@ class AuraUI(App):
 
         # Bind window resize and drag tracking
         Window.bind(on_resize=self._on_resize)
-        Window.bind(on_touch_move=self._window_touch_move)
-        Window.bind(on_touch_up=self._window_touch_up)
+        Window.bind(on_touch_down=self._win_td)
+        Window.bind(on_touch_move=self._win_tm)
+        Window.bind(on_touch_up=self._win_tu)
 
         # Start socket
         self._socket.start()
@@ -687,38 +660,77 @@ class AuraUI(App):
         except Exception:
             return list(TILE_ORDER_DEFAULT), {}
 
-    # --- Drag and drop ---
+    # --- Drag and drop (Window-level, avoids ScrollView grab races) ---
 
-    def _start_drag(self, tile, touch):
+    def _win_td(self, window, touch):
+        """Window on_touch_down: find tile under finger, schedule long-press."""
+        # If a drag is in progress ignore new touches
+        if self._dragging:
+            return
+        for tile in self._grid.children:
+            # Skip the resize handle area — let Tile handle it normally
+            if tile._in_handle(touch):
+                break
+            wx, wy = tile.to_window(0, 0)
+            if (wx <= touch.x < wx + tile.width and
+                    wy <= touch.y < wy + tile.height):
+                # Cancel any leftover pending press
+                if self._lp_sched:
+                    self._lp_sched.cancel()
+                    self._lp_sched = None
+                self._lp_touch_uid = touch.uid
+                self._lp_start_pos = (touch.x, touch.y)
+                uid = touch.uid
+                self._lp_sched = Clock.schedule_once(
+                    lambda dt, t=tile, u=uid: self._maybe_drag(t, u),
+                    0.8
+                )
+                break
+
+    def _win_tm(self, window, touch):
+        """Window on_touch_move: move ghost while dragging; cancel LP if scrolling."""
+        if self._dragging and touch.uid == self._drag_touch_uid:
+            if self._drag_ghost:
+                self._drag_ghost.pos = (
+                    touch.x - self._drag_ghost_offset_x,
+                    touch.y - self._drag_ghost_offset_y,
+                )
+        elif self._lp_sched and touch.uid == self._lp_touch_uid:
+            sx, sy = self._lp_start_pos
+            if abs(touch.x - sx) > dp(15) or abs(touch.y - sy) > dp(15):
+                self._lp_sched.cancel()
+                self._lp_sched     = None
+                self._lp_touch_uid = None
+
+    def _win_tu(self, window, touch):
+        """Window on_touch_up: commit drop or cancel pending long-press."""
+        if self._dragging and touch.uid == self._drag_touch_uid:
+            self._end_drag(touch)
+        elif self._lp_sched and touch.uid == self._lp_touch_uid:
+            self._lp_sched.cancel()
+            self._lp_sched     = None
+            self._lp_touch_uid = None
+
+    def _maybe_drag(self, tile, uid):
+        """Called 0.8 s after touch-down if touch is still alive and hasn't moved."""
+        if self._lp_touch_uid != uid:
+            return  # Touch ended or cancelled before threshold
+        self._lp_sched     = None
+        self._lp_touch_uid = None
         self._dragging       = tile
-        self._drag_touch_uid = touch.uid
+        self._drag_touch_uid = uid
         tile.set_color(C_TILE_HL)
         wx, wy = tile.to_window(0, 0)
+        ox, oy = self._lp_start_pos
         self._drag_ghost = DragGhost(
             label_text=tile.title,
             size_hint=(None, None),
             size=(tile.width, tile.height),
-            pos=(wx, wy)
+            pos=(wx, wy),
         )
-        # Offset so ghost centre tracks the finger
-        self._drag_ghost_offset_x = touch.x - wx
-        self._drag_ghost_offset_y = touch.y - wy
+        self._drag_ghost_offset_x = ox - wx
+        self._drag_ghost_offset_y = oy - wy
         Window.add_widget(self._drag_ghost)
-
-    def _update_drag(self, touch):
-        if self._drag_ghost:
-            self._drag_ghost.pos = (
-                touch.x - self._drag_ghost_offset_x,
-                touch.y - self._drag_ghost_offset_y,
-            )
-
-    def _window_touch_move(self, window, touch):
-        if self._dragging and touch.uid == self._drag_touch_uid:
-            self._update_drag(touch)
-
-    def _window_touch_up(self, window, touch):
-        if self._dragging and touch.uid == self._drag_touch_uid:
-            self._end_drag(touch)
 
     def _end_drag(self, touch):
         tile  = self._dragging
