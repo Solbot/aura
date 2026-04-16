@@ -220,6 +220,9 @@ class Tile(RelativeLayout):
         wx, wy = self.to_window(0, 0)
         lx = touch.x - wx
         ly = touch.y - wy
+        # Guard: touch must actually be inside this tile's bounds first
+        if not (0 <= lx < self.width and 0 <= ly < self.height):
+            return False
         return lx >= self.width - dp(20) and ly <= dp(20)
 
     def on_touch_down(self, touch):
@@ -659,24 +662,25 @@ class AuraUI(App):
         if self._dragging:
             return
         for tile in self._grid.children:
-            # Skip the resize handle area — let Tile handle it normally
+            wx, wy = tile.to_window(0, 0)
+            if not (wx <= touch.x < wx + tile.width and
+                    wy <= touch.y < wy + tile.height):
+                continue
+            # Touch is on this tile — skip if it's in the resize handle
             if tile._in_handle(touch):
                 break
-            wx, wy = tile.to_window(0, 0)
-            if (wx <= touch.x < wx + tile.width and
-                    wy <= touch.y < wy + tile.height):
-                # Cancel any leftover pending press
-                if self._lp_sched:
-                    self._lp_sched.cancel()
-                    self._lp_sched = None
-                self._lp_touch_uid = touch.uid
-                self._lp_start_pos = (touch.x, touch.y)
-                uid = touch.uid
-                self._lp_sched = Clock.schedule_once(
-                    lambda dt, t=tile, u=uid: self._maybe_drag(t, u),
-                    0.8
-                )
-                break
+            # Schedule long-press drag
+            if self._lp_sched:
+                self._lp_sched.cancel()
+                self._lp_sched = None
+            self._lp_touch_uid = touch.uid
+            self._lp_start_pos = (touch.x, touch.y)
+            uid = touch.uid
+            self._lp_sched = Clock.schedule_once(
+                lambda dt, t=tile, u=uid: self._maybe_drag(t, u),
+                0.8
+            )
+            break
 
     def _win_tm(self, window, touch):
         """Window on_touch_move: move ghost while dragging; cancel LP if scrolling."""
