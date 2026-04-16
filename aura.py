@@ -2,6 +2,8 @@ import requests
 import subprocess
 import json
 import os
+import time
+import threading
 import db
 import csam
 import tools
@@ -89,32 +91,132 @@ def build_system_prompt():
         "- Present tool results as exact values naturally in conversation."
     )
 
-ENDPOINT       = db.get('home_pc_endpoint') or "http://localhost:8080/v1/chat/completions"
+# --- Tiered endpoint selection ---
+# Priority: home PC → remote API → local Pi fallback
+# Probe result cached 60s; cache invalidated on connection error.
+
+_LOCAL_ENDPOINT    = "http://localhost:8080/v1/chat/completions"
+_endpoint_cache    = {"url": None, "expires": 0.0}
+_endpoint_lock     = threading.Lock()
+_last_endpoint_url = None   # tracks last logged endpoint for change detection
+
+
+def _probe_health(base_url: str, timeout: float = 2.0) -> bool:
+    """GET <base>/health and return True if the server responds with HTTP < 500."""
+    health_url = base_url.rstrip("/") + "/health"
+    try:
+        r = requests.get(health_url, timeout=timeout)
+        return r.status_code < 500
+    except Exception:
+        return False
+
+
+def get_active_endpoint(invalidate: bool = False) -> str:
+    """
+    Return the best available LLM endpoint, probing in priority order:
+
+      1. home_pc_endpoint  (db config) — probed via /health, 2s timeout
+      2. remote_api_endpoint (db config) — assumed available if set (cloud API)
+      3. local Pi llama-server          — always the final fallback
+
+    Result cached for 60 seconds. Pass invalidate=True to force a fresh probe
+    (called automatically after a connection error).
+    """
+    global _last_endpoint_url
+
+    with _endpoint_lock:
+        now = time.monotonic()
+        if not invalidate and _endpoint_cache["url"] and now < _endpoint_cache["expires"]:
+            return _endpoint_cache["url"]
+
+        home_pc = db.get("home_pc_endpoint") or ""
+        remote  = db.get("remote_api_endpoint") or ""
+
+        chosen_url   = _LOCAL_ENDPOINT
+        chosen_label = "local Pi"
+
+        # Tier 1 — Home PC (probe /health)
+        if home_pc:
+            base = home_pc.replace("/v1/chat/completions", "").rstrip("/")
+            if _probe_health(base, timeout=2.0):
+                chosen_url   = home_pc
+                chosen_label = "home PC"
+
+        # Tier 2 — Remote API (assume available; cloud APIs rarely expose /health)
+        if chosen_url == _LOCAL_ENDPOINT and remote:
+            chosen_url   = remote
+            chosen_label = "remote API"
+
+        # Cache for 60 seconds
+        _endpoint_cache["url"]     = chosen_url
+        _endpoint_cache["expires"] = now + 60.0
+
+        # Notify the UI when the active tier changes
+        if chosen_url != _last_endpoint_url:
+            _last_endpoint_url = chosen_url
+            aura_socket.send_system_message(
+                f"LLM tier: {chosen_label} ({chosen_url})",
+                level="info",
+            )
+
+        return chosen_url
+
+
 ASSISTANT_NAME = db.get('assistant_name')
 SYSTEM_PROMPT  = build_system_prompt()
 
 def llm_call(messages, use_tools=True):
-    """Call LLM with an explicit message list."""
+    """
+    Call the LLM with an explicit message list.
+
+    Automatically selects the best available endpoint (home PC → remote API →
+    local Pi).  On a connection error, invalidates the endpoint cache and retries
+    once against the next available tier before giving up.
+    """
     payload = {"messages": messages, "max_tokens": 512}
     if use_tools:
         payload["tools"]       = tools.get_definitions()
         payload["tool_choice"] = "auto"
+
+    _error_reply = lambda msg: {"choices": [{"message": {
+        "content": msg,
+        "tool_calls": None,
+    }}]}
+
+    endpoint = get_active_endpoint()
     try:
-        r    = requests.post(ENDPOINT, json=payload, timeout=120)
+        r    = requests.post(endpoint, json=payload, timeout=120)
         data = r.json()
         if "choices" not in data:
             aura_socket.send_system_message(f"LLM error: {str(data)[:200]}", level="error")
-            return {"choices": [{"message": {
-                "content": "I had trouble processing that. Could you try again?",
-                "tool_calls": None
-            }}]}
+            return _error_reply("I had trouble processing that. Could you try again?")
         return data
+
+    except requests.exceptions.ConnectionError:
+        # Connection failed — drop the cached endpoint and probe for the next tier
+        aura_socket.send_system_message(
+            f"LLM connection error on {endpoint} — trying next tier...",
+            level="warning",
+        )
+        fallback = get_active_endpoint(invalidate=True)
+        if fallback == endpoint:
+            # No other tier available
+            aura_socket.send_system_message("All LLM tiers unreachable.", level="error")
+            return _error_reply("I'm having trouble connecting right now.")
+        try:
+            r    = requests.post(fallback, json=payload, timeout=120)
+            data = r.json()
+            if "choices" not in data:
+                aura_socket.send_system_message(f"LLM error: {str(data)[:200]}", level="error")
+                return _error_reply("I had trouble processing that. Could you try again?")
+            return data
+        except Exception as e:
+            aura_socket.send_system_message(f"LLM fallback error: {e}", level="error")
+            return _error_reply("I'm having trouble connecting right now.")
+
     except Exception as e:
         aura_socket.send_system_message(f"LLM error: {e}", level="error")
-        return {"choices": [{"message": {
-            "content": "I'm having trouble connecting right now.",
-            "tool_calls": None
-        }}]}
+        return _error_reply("I'm having trouble connecting right now.")
 
 def chat(user_input, hot_memory_note=None, msg_id=None):
     global _csam_locked
