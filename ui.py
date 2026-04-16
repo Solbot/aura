@@ -28,7 +28,6 @@ from kivy.app import App
 from kivy.uix.widget import Widget
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
-from kivy.uix.scrollview import ScrollView
 from kivy.uix.label import Label
 from kivy.uix.textinput import TextInput
 from kivy.uix.button import Button
@@ -536,17 +535,14 @@ class AuraUI(App):
         # Root layout
         self._root = BoxLayout(orientation="vertical")
 
-        # Tile grid (fills available space)
-        self._grid_scroll = ScrollView(size_hint=(1, 1))
+        # Tile grid (fills available space, no scrolling)
         self._grid = GridLayout(
             cols=2,
-            size_hint=(1, None),
+            size_hint=(1, 1),
             spacing=dp(6),
             padding=dp(6)
         )
-        self._grid.bind(minimum_height=self._grid.setter("height"))
-        self._grid_scroll.add_widget(self._grid)
-        self._root.add_widget(self._grid_scroll)
+        self._root.add_widget(self._grid)
 
         # On-screen keyboard (hidden initially)
         self._vkbd = VKeyboard(
@@ -588,32 +584,26 @@ class AuraUI(App):
 
     def _build_tiles(self):
         self._grid.clear_widgets()
-        order, heights = self._load_layout()
+        order, _ = self._load_layout()
 
-        def _h(tile_id):
-            saved = heights.get(tile_id)
-            if saved is not None:
-                return int(saved)
-            return dp(TILE_HEIGHT_DEFAULT[tile_id])
-
-        self._conv_tile = ConversationTile(size_hint=(1, None), height=_h("conversation"))
+        self._conv_tile = ConversationTile(size_hint=(1, 1))
         self._conv_tile.tile_id = "conversation"
 
-        self._conn_tile = ConnectionTile(size_hint=(1, None), height=_h("connection"))
+        self._conn_tile = ConnectionTile(size_hint=(1, 1))
         self._conn_tile.tile_id = "connection"
 
-        self._clock_tile = ClockTile(size_hint=(1, None), height=_h("clock"))
+        self._clock_tile = ClockTile(size_hint=(1, 1))
         self._clock_tile.tile_id = "clock"
 
         self._cpu_tile = StatusTile(
             title="CPU Temp", key="cpu_temp", unit="°C",
-            size_hint=(1, None), height=_h("cpu_temp")
+            size_hint=(1, 1)
         )
         self._cpu_tile.tile_id = "cpu_temp"
 
         self._mem_tile = StatusTile(
             title="Memory", key="memory", unit="MB used",
-            size_hint=(1, None), height=_h("memory")
+            size_hint=(1, 1)
         )
         self._mem_tile.tile_id = "memory"
 
