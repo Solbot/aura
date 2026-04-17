@@ -68,6 +68,8 @@ _logger:        logging.Logger = None  # set up in main()
 DEFAULT_CONFIG = {
     "llama_server_bin":      "llama-server",
     "model_path":            "",
+    "model_url":             "",
+    "hf_token":              "",
     "host":                  "0.0.0.0",
     "port":                  8081,
     "llama_server_port":     8080,
@@ -204,6 +206,228 @@ def get_gpu_memory_info() -> str | None:
     except Exception:
         pass
     return None
+
+
+# ---------------------------------------------------------------------------
+# Model auto-download
+# ---------------------------------------------------------------------------
+
+def _resolve_model_url(model_url: str, model_path: Path) -> str:
+    """
+    Resolve model_url to a plain HTTPS download URL.
+
+    Supported formats
+    -----------------
+    hf://owner/repo/path/to/file.gguf
+        → https://huggingface.co/owner/repo/resolve/main/path/to/file.gguf
+
+    hf://owner/repo
+        → filename inferred from model_path.name
+
+    https://...  (or any other scheme)
+        → returned unchanged
+    """
+    if not model_url.startswith("hf://"):
+        return model_url
+
+    hf_path = model_url[5:].lstrip("/")
+    parts   = hf_path.split("/")
+
+    if len(parts) < 2:
+        raise ValueError(
+            f"Invalid hf:// URL — expected hf://owner/repo[/file]: {model_url}"
+        )
+
+    owner, repo = parts[0], parts[1]
+    filepath    = "/".join(parts[2:]) if len(parts) >= 3 else model_path.name
+
+    return f"https://huggingface.co/{owner}/{repo}/resolve/main/{filepath}"
+
+
+def _fmt_size(n: int) -> str:
+    """Format a byte count as a human-readable string."""
+    if n >= 1_000_000_000:
+        return f"{n / 1_000_000_000:.2f} GB"
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f} MB"
+    return f"{n / 1_000:.1f} KB"
+
+
+def _fmt_eta(seconds: float) -> str:
+    """Format seconds as Xh Ym Zs / Xm Ys / Xs."""
+    s = int(seconds)
+    if s >= 3600:
+        h, s = divmod(s, 3600)
+        m, s = divmod(s, 60)
+        return f"{h}h {m}m {s}s"
+    if s >= 60:
+        m, s = divmod(s, 60)
+        return f"{m}m {s}s"
+    return f"{s}s"
+
+
+def _log_dl_progress(downloaded: int, total: int, t_start: float) -> None:
+    """Log a single download progress line."""
+    elapsed = max(time.time() - t_start, 0.001)
+    speed   = downloaded / elapsed  # bytes/s
+    pct_str = ""
+    eta_str = ""
+    if total > 0:
+        pct     = downloaded / total * 100
+        pct_str = f"{pct:5.1f}%  "
+        eta     = (total - downloaded) / max(speed, 1)
+        eta_str = f"  (~{_fmt_eta(eta)} remaining)"
+    _logger.info(
+        "  %s%s / %s  @ %s/s%s",
+        pct_str,
+        _fmt_size(downloaded),
+        _fmt_size(total) if total else "?",
+        _fmt_size(int(speed)),
+        eta_str,
+    )
+
+
+def _download_stream(url: str, dest: Path, dl_headers: dict) -> None:
+    """
+    Stream-download *url* to *dest*, logging progress every 5 seconds.
+    Downloads to a .tmp file first; renames on success.
+    Raises on any error (caller is responsible for logging).
+    """
+    tmp        = dest.with_suffix(dest.suffix + ".tmp")
+    chunk_size = 1024 * 1024  # 1 MB
+    downloaded = 0
+    total_size = 0
+    t_start    = time.time()
+    t_last_log = t_start
+
+    try:
+        if _USE_REQUESTS:
+            resp = _requests.get(
+                url, headers=dl_headers, stream=True,
+                timeout=30, allow_redirects=True,
+            )
+            resp.raise_for_status()
+            total_size = int(resp.headers.get("Content-Length", 0))
+
+            with open(tmp, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=chunk_size):
+                    if not chunk:
+                        continue
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    now = time.time()
+                    if now - t_last_log >= 5.0:
+                        t_last_log = now
+                        _log_dl_progress(downloaded, total_size, t_start)
+
+        else:
+            req = urllib.request.Request(url)
+            for k, v in dl_headers.items():
+                req.add_header(k, v)
+
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                total_size = int(resp.headers.get("Content-Length", 0))
+                with open(tmp, "wb") as f:
+                    while True:
+                        chunk = resp.read(chunk_size)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        now = time.time()
+                        if now - t_last_log >= 5.0:
+                            t_last_log = now
+                            _log_dl_progress(downloaded, total_size, t_start)
+
+        _log_dl_progress(downloaded, total_size, t_start)  # final line
+
+        # Atomic rename: tmp → dest
+        if dest.exists():
+            dest.unlink()
+        tmp.rename(dest)
+
+        elapsed   = max(time.time() - t_start, 0.001)
+        avg_speed = int(downloaded / elapsed)
+        _logger.info(
+            "Download complete: %s in %s  (avg %s/s)",
+            _fmt_size(downloaded), _fmt_eta(elapsed), _fmt_size(avg_speed),
+        )
+
+    except BaseException:
+        # Clean up partial file on any exit (including KeyboardInterrupt)
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def ensure_model() -> bool:
+    """
+    Verify the model file exists.  If it's missing and *model_url* is set,
+    download it automatically.
+
+    Returns True  — model is ready (already present or just downloaded).
+    Returns False — model is missing and cannot be obtained.
+    """
+    model_str = _config.get("model_path", "").strip()
+    if not model_str:
+        return True  # No model configured — external-server mode, nothing to check.
+
+    model_path = Path(model_str)
+
+    if model_path.is_file():
+        size = model_path.stat().st_size
+        _logger.info("Model found: %s  (%s)", model_path, _fmt_size(size))
+        return True
+
+    # ── Model file is missing ──────────────────────────────────────────────
+    model_url = _config.get("model_url", "").strip()
+    if not model_url:
+        _logger.error("Model file not found: %s", model_path)
+        _logger.error(
+            "Set 'model_url' in aura_server_config.json to download it automatically.\n"
+            "  HuggingFace shorthand: hf://owner/repo/filename.gguf\n"
+            "  Example: hf://bartowski/Meta-Llama-3.1-8B-Instruct-GGUF"
+            "/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf\n"
+            "  Direct URL: https://huggingface.co/.../resolve/main/model.gguf"
+        )
+        return False
+
+    # Resolve hf:// shorthand → HTTPS URL
+    try:
+        url = _resolve_model_url(model_url, model_path)
+    except ValueError as e:
+        _logger.error("Invalid model_url: %s", e)
+        return False
+
+    # Build request headers (HuggingFace auth for private / gated repos)
+    dl_headers: dict = {}
+    hf_token = _config.get("hf_token", "").strip()
+    if hf_token:
+        dl_headers["Authorization"] = f"Bearer {hf_token}"
+
+    # Create destination directory if needed
+    try:
+        model_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        _logger.error("Cannot create model directory %s: %s", model_path.parent, e)
+        return False
+
+    _logger.info("Model not found — downloading automatically...")
+    _logger.info("  Source : %s", url)
+    _logger.info("  Dest   : %s", model_path)
+
+    try:
+        _download_stream(url, model_path, dl_headers)
+        return True
+    except KeyboardInterrupt:
+        _logger.warning("Download cancelled.")
+        return False
+    except Exception as e:
+        _logger.error("Download failed: %s", e)
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -669,6 +893,10 @@ def main() -> None:
         _logger.info("Model:      (external — using pre-running llama-server)")
         _logger.info("Proxy port: %s  →  llama-server port: %s",
                      _config["port"], _config["llama_server_port"])
+
+    # Ensure model file exists — download from model_url if missing
+    if not ensure_model():
+        sys.exit(1)
 
     # Start llama-server child process (if model_path is set)
     if model:
