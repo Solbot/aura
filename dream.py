@@ -87,7 +87,12 @@ def dream(endpoint=None):
 
         consolidated = json.loads(result)
 
-        # Write consolidated facts back Ã¢ÂÂ tagged as source="dream"
+        # Clear old dream entries so stale/placeholder facts don't persist
+        with db.get_connection() as conn:
+            conn.execute("DELETE FROM user_profile WHERE source = 'dream'")
+            conn.commit()
+
+        # Write fresh consolidated facts tagged as source="dream"
         for key, value in consolidated.items():
             if key and value:
                 db.profile_set(key, str(value), source="dream", confidence="high")

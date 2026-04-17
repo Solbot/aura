@@ -183,8 +183,11 @@ def extract_and_store(conversation_text):
                 confidence = fact.get("confidence", "high")
                 store_fact(fact["key"], fact["value"], confidence=confidence, source="conversation")
                 stored.append(f"{fact['key']} = {fact['value']}")
+        if stored:
+            print(f"\r[Facts extracted: {', '.join(stored)}]")
         return stored
-    except Exception:
+    except Exception as e:
+        print(f"\r[extract_and_store error: {e}]")
         return []
 
 def get_relevant_facts(topic):
