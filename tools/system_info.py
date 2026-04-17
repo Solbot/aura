@@ -1,5 +1,5 @@
 # tools/system_info.py
-# Full system awareness tool — Aether's proprioception.
+# Full system awareness tool — AURA's proprioception.
 # Covers all available Pi 5 sensors plus system state.
 # PiSugar battery support placeholder ready for when hardware arrives.
 
@@ -227,7 +227,7 @@ def get_system_info(query=None):
 tools.register(
     name        = "get_system_info",
     description = (
-        "Query the Pi's system state — Aether's body awareness. "
+        "Query the Pi's system state — AURA's body awareness. "
         "Use for: current date/time, CPU temperature, NVMe temperature, "
         "fan speed, CPU frequency and throttle status, disk space, RAM, "
         "network connectivity, uptime, GPIO state, or battery level. "

@@ -61,7 +61,7 @@ def execute(name, arguments, confirm_fn=None):
         skip_confirm_key = f"tool_confirm_skip_{name}"
         skip = db.get(skip_confirm_key) == "1"
         if not skip and confirm_fn:
-            prompt = f"Aether wants to run '{name}' with {arguments}. Allow? (yes/no): "
+            prompt = f"{db.get('assistant_name')} wants to run '{name}' with {arguments}. Allow? (yes/no): "
             if not confirm_fn(prompt):
                 return False, "Cancelled by user."
 
@@ -79,4 +79,6 @@ def load_all():
     """Import all tool modules so they self-register."""
     from tools import system_info   # noqa: F401
     from tools import user_profile  # noqa: F401
+    from tools import tasks         # noqa: F401
+    from tools import reminders     # noqa: F401
     # Add new tool imports here as they are created

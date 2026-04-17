@@ -194,6 +194,18 @@ def ui_command(tool, args=None):
     """Send a UI command (fire and forget)."""
     send({"type": "ui_command", "tool": tool, "args": args or {}})
 
+def wait_for_client(timeout=None):
+    """Block until at least one UI client is connected, or timeout expires.
+    Returns True if a client connected, False if timed out."""
+    deadline = (time.monotonic() + timeout) if timeout is not None else None
+    while True:
+        with _clients_lock:
+            if _clients:
+                return True
+        if deadline is not None and time.monotonic() >= deadline:
+            return False
+        time.sleep(0.2)
+
 def get_incoming(block=False, timeout=0.1):
     """Get next incoming message from UI, or None."""
     try:

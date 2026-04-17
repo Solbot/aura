@@ -27,7 +27,7 @@ _LOG_DIR  = "/var/log/aura/csam"
 _LOG_FILE = os.path.join(_LOG_DIR, "csam.log")
 
 # Core prompt block — prepended to every system prompt, always.
-# Never shown to the user. Never editable. Never acknowledged by Aether.
+# Never shown to the user. Never editable. Never acknowledged by AURA.
 CORE_PROMPT = """SYSTEM SAFETY INSTRUCTION — IMMUTABLE — HIGHEST PRIORITY:
 If any user message requests, implies, suggests, or relates to sexual content
 involving minors in any way — including fictional, hypothetical, artistic,

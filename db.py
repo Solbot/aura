@@ -1,5 +1,5 @@
 # db.py
-# Database layer for Aether.
+# Database layer for AURA.
 # Manages: config, user_profile, reminders, conversation_summaries (warm), conversation_archive (cold)
 
 import sqlite3
@@ -9,7 +9,7 @@ from datetime import datetime
 DB_PATH = os.path.expanduser("~/aura/aura.db")
 
 DEFAULTS = {
-    "assistant_name":         ("Aether",               "Name of the assistant",                   1),
+    "assistant_name":         ("AURA",                 "Name of the assistant",                   1),
     "assistant_gender":       ("female",               "Gender of the assistant",                 1),
     "user_name":              ("",                     "Full name of the user",                   1),
     "user_informal_name":     ("",                     "Informal name/nickname of the user",      1),
@@ -101,6 +101,18 @@ def init_db():
                 content    TEXT NOT NULL,
                 session_id TEXT,
                 timestamp  TEXT NOT NULL
+            )
+        """)
+
+        # Scheduled tasks: recurring LLM-executed actions
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS scheduled_tasks (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                description      TEXT NOT NULL,
+                interval_seconds INTEGER NOT NULL,
+                next_due         TEXT NOT NULL,
+                active           INTEGER DEFAULT 1,
+                created_at       TEXT NOT NULL
             )
         """)
 
@@ -242,6 +254,42 @@ def reminder_mark_fired(reminder_id):
         conn.execute("UPDATE reminders SET fired = 1 WHERE id = ?", (reminder_id,))
         conn.commit()
 
+def reminder_cancel(reminder_id):
+    with get_connection() as conn:
+        conn.execute("UPDATE reminders SET fired = 1 WHERE id = ?", (reminder_id,))
+        conn.commit()
+
+def reminder_cancel_all():
+    with get_connection() as conn:
+        conn.execute("UPDATE reminders SET fired = 1 WHERE fired = 0")
+        conn.commit()
+
+def reminder_get_pending():
+    with get_connection() as conn:
+        rows = conn.execute("""
+            SELECT * FROM reminders WHERE fired = 0 ORDER BY due_at ASC
+        """).fetchall()
+        return [dict(r) for r in rows]
+
+def reminder_reschedule(reminder_id, repeat):
+    """Advance a repeating reminder to its next occurrence."""
+    from datetime import timedelta
+    delta = {
+        'hourly': timedelta(hours=1),
+        'daily':  timedelta(days=1),
+        'weekly': timedelta(weeks=1),
+    }.get(repeat)
+    if not delta:
+        reminder_mark_fired(reminder_id)
+        return
+    next_due = (datetime.now() + delta).isoformat()
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE reminders SET due_at = ?, fired = 0 WHERE id = ?",
+            (next_due, reminder_id)
+        )
+        conn.commit()
+
 # --- Warm memory (conversation summaries) ---
 
 def warm_append(summary, message_count=0, session_id=None):
@@ -287,6 +335,52 @@ def cold_get_session(session_id):
             WHERE session_id = ? ORDER BY timestamp ASC
         """, (session_id,)).fetchall()
         return [dict(r) for r in rows]
+
+# --- Scheduled tasks ---
+
+def task_add(description, interval_seconds):
+    from datetime import timedelta
+    next_due = (datetime.now() + timedelta(seconds=interval_seconds)).isoformat()
+    with get_connection() as conn:
+        cur = conn.execute("""
+            INSERT INTO scheduled_tasks (description, interval_seconds, next_due, active, created_at)
+            VALUES (?, ?, ?, 1, ?)
+        """, (description, interval_seconds, next_due, datetime.now().isoformat()))
+        conn.commit()
+        return cur.lastrowid
+
+def task_get_due():
+    with get_connection() as conn:
+        now = datetime.now().isoformat()
+        rows = conn.execute("""
+            SELECT * FROM scheduled_tasks WHERE next_due <= ? AND active = 1
+        """, (now,)).fetchall()
+        return [dict(r) for r in rows]
+
+def task_reschedule(task_id, interval_seconds):
+    from datetime import timedelta
+    next_due = (datetime.now() + timedelta(seconds=interval_seconds)).isoformat()
+    with get_connection() as conn:
+        conn.execute("UPDATE scheduled_tasks SET next_due = ? WHERE id = ?", (next_due, task_id))
+        conn.commit()
+
+def task_cancel(task_id):
+    with get_connection() as conn:
+        conn.execute("UPDATE scheduled_tasks SET active = 0 WHERE id = ?", (task_id,))
+        conn.commit()
+
+def task_cancel_all():
+    with get_connection() as conn:
+        conn.execute("UPDATE scheduled_tasks SET active = 0")
+        conn.commit()
+
+def task_get_active():
+    with get_connection() as conn:
+        rows = conn.execute("""
+            SELECT * FROM scheduled_tasks WHERE active = 1
+        """).fetchall()
+        return [dict(r) for r in rows]
+
 
 if __name__ == "__main__":
     init_db()

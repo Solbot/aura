@@ -1,5 +1,5 @@
 # memory.py
-# Three-tier memory system for Aether.
+# Three-tier memory system for AURA.
 #
 # HOT   â Last N messages in RAM (the LLM's context window)
 # WARM  â SQLite summaries of pruned conversation chunks
@@ -24,7 +24,7 @@ produce a concise factual summary of what was discussed. Focus on:
 - Facts shared about the user (name, family, dates, preferences, health, work)
 - Topics discussed
 - Decisions or plans made
-- Anything Aether committed to remembering
+- Anything the assistant committed to remembering
 
 Write in third person. Be brief â 3-6 sentences maximum.
 Return only the summary, no preamble."""
@@ -87,7 +87,7 @@ def _prune_if_needed():
 
     # Summarise the chunk
     chunk_text = "\n".join([
-        f"{'User' if m['role']=='user' else 'Aether'}: {m['content']}"
+        f"{'User' if m['role']=='user' else db.get('assistant_name')}: {m['content']}"
         for m in pruned
     ])
     summary = _llm_summarise(chunk_text)

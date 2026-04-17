@@ -1,5 +1,5 @@
 # dream.py
-# Aether's sleep/dream cycle.
+# AURA's sleep/dream cycle.
 # Consolidates raw profile facts AND warm conversation summaries
 # into a clean canonical user profile.
 

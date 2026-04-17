@@ -2,7 +2,6 @@ import requests
 import json
 import db
 
-ENDPOINT = db.get('home_pc_endpoint') or "http://localhost:8080/v1/chat/completions"
 
 BOOTSTRAP_PROMPT = """You are an AI assistant meeting a new user for the very first time.
 You have no name yet — the user may give you one, or you can suggest AURA as a default.
@@ -40,7 +39,8 @@ Return ONLY a valid JSON object with these keys (omit any you cannot determine):
 Return only the JSON object, no other text."""
 
 def llm(messages, max_tokens=256):
-    response = requests.post(ENDPOINT, json={
+    endpoint = db.get('home_pc_endpoint') or "http://localhost:8080/v1/chat/completions"
+    response = requests.post(endpoint, json={
         "messages": messages,
         "max_tokens": max_tokens
     })
@@ -69,6 +69,8 @@ def extract_config(conversation):
         print(f"[Config extraction failed: {e}]")
         return {}
 
+USER_FACTS = {"user_name", "user_informal_name", "location", "tone_preference", "use_case"}
+
 def save_config(extracted):
     mapping = {
         "user_name":          "user_name",
@@ -85,15 +87,21 @@ def save_config(extracted):
         if key in extracted and extracted[key]:
             db.set(dbkey, str(extracted[key]))
             saved.append(f"{dbkey} = {extracted[key]}")
+            if key in USER_FACTS:
+                db.profile_set(dbkey, str(extracted[key]), source="first_boot")
     return saved
 
 def run(speak_fn):
-    print("\nStarting first boot setup...\n")
+    import aura_socket
+
+    print("[First boot] Waiting for UI to connect...")
+    aura_socket.wait_for_client()
+    print("[First boot] UI connected. Starting setup.")
 
     opening = ("Hi there. I'm an AI assistant, and this is the first time we've met. "
                "Before we get started properly, I'd love to get to know you a little. "
                "What should I call you?")
-    print(f"AURA: {opening}")
+    aura_socket.send_chat_response(opening)
     speak_fn(opening)
 
     conversation = [
@@ -103,15 +111,18 @@ def run(speak_fn):
 
     turn = 0
     while True:
-        user_input = input("\nYou: ").strip()
-        if not user_input:
-            continue
+        # Wait for user input from the UI via socket
+        user_input = ""
+        while not user_input:
+            msg = aura_socket.get_incoming(block=True, timeout=0.5)
+            if msg and msg.get("type") == "chat_input":
+                user_input = msg.get("text", "").strip()
 
         conversation.append({"role": "user", "content": user_input})
         reply = llm(conversation)
         conversation.append({"role": "assistant", "content": reply})
 
-        print(f"\nAURA: {reply}")
+        aura_socket.send_chat_response(reply)
         speak_fn(reply)
 
         turn += 1
@@ -120,11 +131,11 @@ def run(speak_fn):
             extracted = extract_config(conversation)
             saved = save_config(extracted)
             if saved:
-                print(f"\n[Config saved: {', '.join(saved)}]")
+                print(f"[First boot config saved: {', '.join(saved)}]")
             else:
-                print("\n[No config extracted — keeping defaults]")
-            db.complete_first_boot()
-            print("\n[First boot complete — starting main session]\n")
+                print("[First boot: no config extracted — keeping defaults]")
+            db.set_first_boot_complete()
+            print("[First boot complete — starting main session]")
             break
 
     return True

@@ -1,5 +1,5 @@
 # commands.py
-# Debug and utility commands for Aether.
+# Debug and utility commands for AURA.
 # All commands start with "/" and are intercepted before being sent to the LLM.
 
 import db
@@ -20,7 +20,7 @@ def handle(user_input, system_prompt, assistant_name):
 
     if cmd == "/help":
         return (
-            "\n--- Aether Debug Commands ---\n"
+            "\n--- AURA Debug Commands ---\n"
             "  /help              This list\n"
             "  /status            DB stats, hot count, dream state\n"
             "  /prompt            Show current system prompt\n"
@@ -36,6 +36,8 @@ def handle(user_input, system_prompt, assistant_name):
             "  /config            Show all config settings\n"
             "  /audio on|off      Toggle TTS audio output (persistent)\n"
             "  /tools             Toggle tool call debug output\n"
+            "  /reboot            Restart all Aura services\n"
+            "  /wipe              Wipe all data (requires: /wipe confirm)\n"
         )
 
     if cmd == "/status":
@@ -124,7 +126,7 @@ def handle(user_input, system_prompt, assistant_name):
     if cmd == "/dream":
         import dream, awareness
         if awareness._aether_busy:
-            return "\n[Cannot dream while Aether is busy]\n"
+            return "\n[Cannot dream while AURA is busy]\n"
         print(f"\n[Running dream cycle...]")
         result = dream.dream()
         if result:
@@ -194,5 +196,58 @@ def handle(user_input, system_prompt, assistant_name):
         db.set("debug_tools", new)
         state = "enabled" if new == "1" else "disabled"
         return f"\n[Tool debug {state}]\n"
+
+    if cmd == "/reboot":
+        def _do_reboot():
+            import time, subprocess
+            time.sleep(1.5)
+            # Restart UI first (independent service), then the main daemon.
+            # systemd handles both; Restart=always brings them back cleanly.
+            subprocess.run(['sudo', 'systemctl', 'restart', 'aura-ui'], check=False)
+            subprocess.run(['sudo', 'systemctl', 'restart', 'aura'],    check=False)
+        import threading
+        threading.Thread(target=_do_reboot, daemon=True).start()
+        return "\n[Rebooting — Aura services will restart momentarily.]\n"
+
+    if cmd == "/wipe":
+        if not args or args[0].lower() != "confirm":
+            return (
+                "\n--- /wipe WARNING ---\n"
+                "  This permanently deletes ALL Aura data:\n"
+                "    - All conversation history (hot / warm / cold)\n"
+                "    - All learned profile facts and memory\n"
+                "    - All config settings (reset to defaults)\n"
+                "    - All reminders\n"
+                "    - All log files (CSAM log is preserved)\n"
+                "  The database will be rebuilt and first-boot setup\n"
+                "  will run on the next start.\n\n"
+                "  To confirm: /wipe confirm\n"
+            )
+        def _do_wipe():
+            import time, subprocess, os, glob
+            time.sleep(1.5)
+            # Remove database
+            db_path = os.path.expanduser("~/aura/aura.db")
+            try:
+                os.remove(db_path)
+            except Exception:
+                pass
+            # Remove log files — never touch the CSAM log
+            log_dir = os.path.expanduser("~/aura/logs")
+            for log_file in glob.glob(os.path.join(log_dir, "*.log")):
+                try:
+                    os.remove(log_file)
+                except Exception:
+                    pass
+            # Restart UI first, then the main daemon — same as /reboot
+            subprocess.run(['sudo', 'systemctl', 'restart', 'aura-ui'], check=False)
+            subprocess.run(['sudo', 'systemctl', 'restart', 'aura'],    check=False)
+        import threading
+        threading.Thread(target=_do_wipe, daemon=True).start()
+        return (
+            "\n[Wipe confirmed. All data is being erased.\n"
+            " CSAM log preserved. Services restarting —\n"
+            " first-boot setup will run on next launch.]\n"
+        )
 
     return f"\n[Unknown command: {cmd}. Type /help for commands]\n"

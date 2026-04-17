@@ -44,6 +44,9 @@ def speak(text):
     )
     proc.communicate(input=audio)
 
+# --- Start IPC socket server (must be up before first boot so the UI can connect) ---
+aura_socket.start()
+
 # --- First boot ---
 if db.is_first_boot():
     first_boot.run(speak)
@@ -51,9 +54,6 @@ if db.is_first_boot():
 
 # --- Start background awareness thread ---
 awareness.start()
-
-# --- Start IPC socket server ---
-aura_socket.start()
 
 # --- Build system prompt ---
 def build_system_prompt():
@@ -88,7 +88,15 @@ def build_system_prompt():
         "important dates, hobbies): IMMEDIATELY call store_user_fact.\n"
         "- Pass values exactly as the user says them — the system will clean and normalise them.\n"
         "- Use get_user_facts when asked to recall something about the user.\n"
-        "- Present tool results as exact values naturally in conversation."
+        "- Present tool results as exact values naturally in conversation.\n"
+        "- When the user asks you to do something repeatedly or at an interval "
+        "(e.g. 'update me every 10 seconds', 'check temperature every minute'), "
+        "call schedule_task to register it. Never just promise and forget.\n"
+        "- When the user says stop/cancel for an ongoing recurring task, call cancel_task.\n"
+        "- When the user asks to be reminded of something, call set_reminder with the message "
+        "and a natural-language 'when' (e.g. 'in 30 minutes', 'tomorrow at 9am', "
+        "'next friday afternoon'). Use list_reminders to show pending ones, "
+        "cancel_reminder to remove them."
     )
 
 # --- Tiered endpoint selection ---
@@ -229,9 +237,13 @@ def chat(user_input, hot_memory_note=None, msg_id=None):
     awareness.set_busy(True)
     reply = ""
     try:
+        # Inject accurate datetime so the model never has to guess it
+        _, _current_dt = tools.execute("get_system_info", {"query": "datetime"})
+        _dynamic_prompt = SYSTEM_PROMPT + f"\n\nCURRENT SYSTEM TIME: {_current_dt}"
+
         for _ in range(5):
             # Get full context including warm summaries
-            messages = memory.get_context(SYSTEM_PROMPT)
+            messages = memory.get_context(_dynamic_prompt)
             data     = llm_call(messages, use_tools=True)
             message  = data["choices"][0]["message"]
             reply    = message.get("content") or ""
@@ -269,7 +281,7 @@ def chat(user_input, hot_memory_note=None, msg_id=None):
                 f"Continue naturally using these exact values."
             )
             memory.add_message("user", instruction)
-            messages2 = memory.get_context(SYSTEM_PROMPT)
+            messages2 = memory.get_context(_dynamic_prompt)
             data2     = llm_call(messages2, use_tools=False)
             message   = data2["choices"][0]["message"]
             reply     = message.get("content") or ""
@@ -304,6 +316,51 @@ def chat(user_input, hot_memory_note=None, msg_id=None):
     return reply
 
 
+def _run_awareness_llm(prompt):
+    """
+    Call the LLM with an awareness-generated prompt (reminder due, task due, etc.)
+    and return the reply string, or None.  Uses the full system prompt + injected
+    datetime so the LLM has complete context and can call tools if needed.
+    """
+    if _csam_locked:
+        return None
+
+    _, _dt = tools.execute("get_system_info", {"query": "datetime"})
+    sys_prompt = SYSTEM_PROMPT + f"\n\nCURRENT SYSTEM TIME: {_dt}"
+
+    messages = [
+        {"role": "system", "content": sys_prompt},
+        {"role": "user",   "content": prompt}
+    ]
+    data    = llm_call(messages, use_tools=True)
+    message = data["choices"][0]["message"]
+    reply   = message.get("content") or ""
+
+    if message.get("tool_calls"):
+        tool_results = []
+        messages.append({"role": "assistant", "content": None, "tool_calls": message["tool_calls"]})
+        for tc in message["tool_calls"]:
+            fn_name = tc["function"]["name"]
+            try:
+                fn_args = json.loads(tc["function"]["arguments"])
+            except Exception:
+                fn_args = {}
+            _, result = tools.execute(fn_name, fn_args, lambda p: True)
+            tool_results.append(result)
+            messages.append({
+                "role": "tool", "tool_call_id": tc["id"],
+                "name": fn_name, "content": result
+            })
+        messages.append({
+            "role": "user",
+            "content": f"Tool results: {' | '.join(tool_results)}\n\nRespond naturally."
+        })
+        data2 = llm_call(messages, use_tools=False)
+        reply = data2["choices"][0]["message"].get("content") or ""
+
+    return reply or None
+
+
 aura_socket.send_system_message(f"{ASSISTANT_NAME} is online.", level="info")
 
 while True:
@@ -313,6 +370,15 @@ while True:
         aura_socket.send_chat_response(msg)
         speak(msg)
         memory.add_message("assistant", msg)
+        continue
+
+    pending_check = awareness.get_pending_llm_check()
+    if pending_check:
+        check_reply = _run_awareness_llm(pending_check)
+        if check_reply:
+            memory.add_message("assistant", check_reply)
+            aura_socket.send_chat_response(check_reply)
+            speak(check_reply)
         continue
 
     socket_msg = aura_socket.get_incoming(block=True, timeout=0.2)
