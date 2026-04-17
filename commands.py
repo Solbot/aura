@@ -35,6 +35,7 @@ def handle(user_input, system_prompt, assistant_name):
             "  /set key value     Set a config value\n"
             "  /config            Show all config settings\n"
             "  /audio on|off      Toggle TTS audio output (persistent)\n"
+            "  /tools             Toggle tool call debug output\n"
         )
 
     if cmd == "/status":
@@ -186,5 +187,12 @@ def handle(user_input, system_prompt, assistant_name):
             db.set('audio_enabled', '0')
             return "\n[Audio disabled]\n"
         return "\n[Usage: /audio on | /audio off]\n"
+
+    if cmd == "/tools":
+        current = db.get("debug_tools")
+        new = "0" if current == "1" else "1"
+        db.set("debug_tools", new)
+        state = "enabled" if new == "1" else "disabled"
+        return f"\n[Tool debug {state}]\n"
 
     return f"\n[Unknown command: {cmd}. Type /help for commands]\n"

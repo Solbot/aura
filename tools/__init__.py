@@ -67,8 +67,12 @@ def execute(name, arguments, confirm_fn=None):
 
     try:
         result = tool["function"](**arguments)
+        if db.get("debug_tools") == "1":
+            print(f"[Tool] {name}({arguments}) → {str(result)[:200]}")
         return True, str(result)
     except Exception as e:
+        if db.get("debug_tools") == "1":
+            print(f"[Tool] {name}({arguments}) → ERROR: {e}")
         return False, f"Tool error: {e}"
 
 def load_all():

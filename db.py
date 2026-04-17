@@ -32,6 +32,7 @@ DEFAULTS = {
     "awareness_interval":     ("5",                    "Awareness check interval in minutes",     1),
     "critical_temp_threshold":("80",                   "CPU temp threshold for warnings (C)",     1),
     "audio_enabled":          ("1",                    "TTS audio output enabled (1=on, 0=off)",  1),
+    "debug_tools":            ("0",                    "Print tool call args and results to console (1=on)", 1),
 }
 
 def get_connection():
