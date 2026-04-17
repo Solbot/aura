@@ -181,8 +181,7 @@ def extract_and_store(conversation_text):
         for fact in facts:
             if "key" in fact and "value" in fact:
                 confidence = fact.get("confidence", "high")
-                db.profile_set(fact["key"], fact["value"],
-                               source="conversation", confidence=confidence)
+                store_fact(fact["key"], fact["value"], confidence=confidence, source="conversation")
                 stored.append(f"{fact['key']} = {fact['value']}")
         return stored
     except Exception:

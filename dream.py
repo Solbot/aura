@@ -23,10 +23,11 @@ Your job is to:
      job_start, location, hobbies, children, pets, and any other relevant keys
 5. Extract any additional facts mentioned in the conversation summaries
 6. Remove redundant entries captured in consolidated entries
+7. OMIT any entry whose value is "Not specified", "Unknown", or equivalent — do not carry forward placeholder values
 
 Return ONLY a valid JSON object where keys are canonical fact names and values are clean strings.
 Dates must be in "Month DD YYYY" format where year is known, or "Month DD" where only day/month known.
-Return only the JSON object Ã¢ÂÂ no explanation, no markdown."""
+Return only the JSON object — no explanation, no markdown."""
 
 def dream(endpoint=None):
     """

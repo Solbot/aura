@@ -313,6 +313,11 @@ def chat(user_input, hot_memory_note=None, msg_id=None):
         reply = "I've already shared resources that can help. I'm not able to discuss this further."
 
     memory.add_message("assistant", reply)
+
+    # Fallback fact extraction — catches facts the LLM mentioned but didn't store via tool call
+    from tools.user_profile import extract_and_store
+    extract_and_store(f"User: {user_input}\nAssistant: {reply}")
+
     return reply
 
 
