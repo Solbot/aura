@@ -20,7 +20,7 @@ def handle(user_input, system_prompt, assistant_name):
 
     if cmd == "/help":
         return (
-            "\n--- AURA Debug Commands ---\n"
+            f"\n--- {assistant_name} Debug Commands ---\n"
             "  /help              This list\n"
             "  /status            DB stats, hot count, dream state\n"
             "  /prompt            Show current system prompt\n"
@@ -126,7 +126,7 @@ def handle(user_input, system_prompt, assistant_name):
     if cmd == "/dream":
         import dream, awareness
         if awareness._aether_busy:
-            return "\n[Cannot dream while AURA is busy]\n"
+            return f"\n[Cannot dream while {db.get('assistant_name')} is busy]\n"
         print(f"\n[Running dream cycle...]")
         result = dream.dream()
         if result:

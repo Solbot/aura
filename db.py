@@ -9,7 +9,7 @@ from datetime import datetime
 DB_PATH = os.path.expanduser("~/aura/aura.db")
 
 DEFAULTS = {
-    "assistant_name":         ("AURA",                 "Name of the assistant",                   1),
+    "assistant_name":         ("Aura",                 "Name of the assistant",                   1),
     "assistant_gender":       ("female",               "Gender of the assistant",                 1),
     "user_name":              ("",                     "Full name of the user",                   1),
     "user_informal_name":     ("",                     "Informal name/nickname of the user",      1),

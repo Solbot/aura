@@ -104,6 +104,7 @@ Nothing is ever deleted without explicit user instruction (cold archive is perma
 | API keys | Environment variables, never hardcoded |
 | Network | VPN for home connectivity |
 | Updates | Git for application code, manual apt for OS |
+| Local data | `aura.db` and `logs/` are in `.gitignore` — never committed to GitHub |
 
 ---
 
@@ -122,6 +123,10 @@ Nothing is ever deleted without explicit user instruction (cold archive is perma
 ## First Boot Philosophy
 
 Natural conversation, not a configuration wizard. AURA introduces herself, explains the purpose of the conversation, makes clear sharing is optional. Name exchange first, then organic chat surfaces location, use case, and personality calibration. Never pushes if user declines. Goal: feels like meeting someone. All settings revisable anytime.
+
+Gathered facts are written to two places:
+- `config` table — for runtime use (assistant name, tone, use case, etc.)
+- `user_profile` table with `source='first_boot'` — so they participate in dream consolidation and are treated as known facts from the start
 
 ---
 
@@ -185,8 +190,8 @@ All commands start with `/` and are intercepted before reaching the LLM (instant
 | `awareness.py` | Background thread: reminders, thermal, dream trigger, busy lock |
 | `commands.py` | Debug/utility slash commands |
 | `csam.py` | Hardcoded CSAM safety — never configurable |
-| `first_boot.py` | First-date conversation, populates config |
-| `tools/__init__.py` | Tool registry with FREE/CONFIRM/LOCKED tiers |
+| `first_boot.py` | First-date conversation, populates config and user_profile (source='first_boot') |
+| `tools/__init__.py` | Tool registry with FREE/CONFIRM/LOCKED tiers — CONFIRM prompt uses assistant name from config |
 | `tools/system_info.py` | Pi sensor tool (date/time, temp, fan, disk, RAM, network) |
 | `tools/user_profile.py` | store_user_fact / get_user_facts tools |
 | `systemd/llama-server.service` | Systemd service file |
@@ -204,7 +209,7 @@ All commands start with `/` and are intercepted before reaching the LLM (instant
 - [x] Git repository — github.com/Solbot/aura
 - [x] Config system (SQLite)
 - [x] System prompt built from config
-- [x] First boot "first date" conversation
+- [x] First boot "first date" conversation — stores facts in both config and user_profile
 - [x] CSAM safety module (hardcoded, non-configurable)
 - [x] Tool registry (FREE/CONFIRM/LOCKED tiers)
 - [x] System info tool (full Pi 5 sensor coverage)
