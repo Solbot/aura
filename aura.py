@@ -18,8 +18,6 @@ from piper import PiperVoice, SynthesisConfig
 db.init_db()
 tools.load_all()
 
-# --- CSAM session lock ---
-_csam_locked = False
 
 # --- Load voice ---
 def load_voice():
@@ -56,6 +54,30 @@ if db.is_first_boot():
 awareness.start()
 
 # --- Build system prompt ---
+def _web_search_rules():
+    auto = db.get("auto_search") == "1"
+    if auto:
+        trigger = (
+            "Use web_search proactively whenever a question involves recent events, "
+            "current data, news, prices, weather, or any fact that may have changed "
+            "since your training cutoff. You do not need to be asked."
+        )
+    else:
+        trigger = (
+            "Use web_search when the user asks about current events, news, recent "
+            "information, or explicitly asks you to look something up."
+        )
+    return (
+        "- WEB SEARCH: " + trigger + "\n"
+        "- Never announce that you are searching or cite 'the web' as a source — "
+        "just answer naturally with the information you found.\n"
+        "- Never fabricate search results. If web_search returns nothing useful, say so.\n"
+        "- When the user shares a URL or wants more detail from a search result, "
+        "call fetch_page. Pages are cached for one hour so follow-up questions "
+        "about the same page work without re-fetching.\n"
+    )
+
+
 def build_system_prompt():
     facts = db.profile_get_all()
     dream_facts = {f['key']: f['value'] for f in facts if f['source'] == 'dream'}
@@ -96,7 +118,8 @@ def build_system_prompt():
         "- When the user asks to be reminded of something, call set_reminder with the message "
         "and a natural-language 'when' (e.g. 'in 30 minutes', 'tomorrow at 9am', "
         "'next friday afternoon'). Use list_reminders to show pending ones, "
-        "cancel_reminder to remove them."
+        "cancel_reminder to remove them.\n"
+        + _web_search_rules()
     )
 
 # --- Tiered endpoint selection ---
@@ -172,6 +195,26 @@ def get_active_endpoint(invalidate: bool = False) -> str:
 
 ASSISTANT_NAME = db.get('assistant_name')
 SYSTEM_PROMPT  = build_system_prompt()
+_prompt_dirty  = False
+
+
+def _mark_prompt_dirty():
+    global _prompt_dirty
+    _prompt_dirty = True
+
+
+def _rebuild_if_dirty():
+    global SYSTEM_PROMPT, _prompt_dirty
+    if _prompt_dirty:
+        SYSTEM_PROMPT  = build_system_prompt()
+        _prompt_dirty  = False
+
+
+# Wire profile-change callbacks so SYSTEM_PROMPT stays fresh without
+# rebuilding it on every single chat turn.
+import tools.user_profile as _up_mod
+_up_mod._on_profile_changed = _mark_prompt_dirty
+awareness._on_dream_complete = _mark_prompt_dirty
 
 def llm_call(messages, use_tools=True):
     """
@@ -193,12 +236,19 @@ def llm_call(messages, use_tools=True):
 
     endpoint = get_active_endpoint()
     try:
-        r    = requests.post(endpoint, json=payload, timeout=120)
+        r    = requests.post(endpoint, json=payload, timeout=(10, 300))
         data = r.json()
         if "choices" not in data:
             aura_socket.send_system_message(f"LLM error: {str(data)[:200]}", level="error")
             return _error_reply("I had trouble processing that. Could you try again?")
         return data
+
+    except requests.exceptions.Timeout:
+        aura_socket.send_system_message(
+            f"LLM read timeout on {endpoint} — inference took too long.",
+            level="error",
+        )
+        return _error_reply("That took too long to process. Try a shorter message.")
 
     except requests.exceptions.ConnectionError:
         # Connection failed — drop the cached endpoint and probe for the next tier
@@ -212,7 +262,7 @@ def llm_call(messages, use_tools=True):
             aura_socket.send_system_message("All LLM tiers unreachable.", level="error")
             return _error_reply("I'm having trouble connecting right now.")
         try:
-            r    = requests.post(fallback, json=payload, timeout=120)
+            r    = requests.post(fallback, json=payload, timeout=(10, 300))
             data = r.json()
             if "choices" not in data:
                 aura_socket.send_system_message(f"LLM error: {str(data)[:200]}", level="error")
@@ -226,12 +276,26 @@ def llm_call(messages, use_tools=True):
         aura_socket.send_system_message(f"LLM error: {e}", level="error")
         return _error_reply("I'm having trouble connecting right now.")
 
+def _upcoming_dates_note():
+    """Pre-compute days-until for all date facts so the LLM never has to do date arithmetic."""
+    upcoming = db.profile_get_upcoming_dates(days_ahead=365)
+    if not upcoming:
+        return ""
+    def _fmt(e):
+        d = e['days_until']
+        if d == 0:
+            return f"- {e['key']} ({e['value']}): TODAY"
+        return f"- {e['key']} ({e['value']}): in {d} day{'s' if d != 1 else ''}"
+
+    lines = [_fmt(e) for e in upcoming]
+    return (
+        "\n\nUPCOMING DATES (pre-calculated — use these exact numbers, do not recompute):\n"
+        + "\n".join(lines)
+    )
+
+
 def chat(user_input, hot_memory_note=None, msg_id=None):
-    global _csam_locked
-
-    if hot_memory_note:
-        memory.add_message("system", f"[Background awareness]: {hot_memory_note}")
-
+    _rebuild_if_dirty()
     memory.add_message("user", user_input)
 
     awareness.set_busy(True)
@@ -239,7 +303,9 @@ def chat(user_input, hot_memory_note=None, msg_id=None):
     try:
         # Inject accurate datetime so the model never has to guess it
         _, _current_dt = tools.execute("get_system_info", {"query": "datetime"})
-        _dynamic_prompt = SYSTEM_PROMPT + f"\n\nCURRENT SYSTEM TIME: {_current_dt}"
+        _dynamic_prompt = SYSTEM_PROMPT + f"\n\nCURRENT SYSTEM TIME: {_current_dt}" + _upcoming_dates_note()
+        if hot_memory_note:
+            _dynamic_prompt += f"\n\n[Background awareness]: {hot_memory_note}"
 
         for _ in range(5):
             # Get full context including warm summaries
@@ -252,7 +318,7 @@ def chat(user_input, hot_memory_note=None, msg_id=None):
                 break
 
             # Store the assistant tool-call message directly in hot memory
-            memory.get_hot().append({
+            memory.add_hot_raw({
                 "role":       "assistant",
                 "content":    None,
                 "tool_calls": message["tool_calls"]
@@ -268,7 +334,7 @@ def chat(user_input, hot_memory_note=None, msg_id=None):
                     fn_args = {}
                 success, result = tools.execute(fn_name, fn_args, lambda p: True)
                 tool_results.append(result)
-                memory.get_hot().append({
+                memory.add_hot_raw({
                     "role":         "tool",
                     "tool_call_id": tc["id"],
                     "name":         fn_name,
@@ -289,7 +355,7 @@ def chat(user_input, hot_memory_note=None, msg_id=None):
             # Remove the tool instruction from hot — it was scaffolding
             hot = memory.get_hot()
             if hot and hot[-1].get("content") == instruction:
-                hot.pop()
+                memory.pop_hot()
 
             if not message.get("tool_calls"):
                 break
@@ -299,7 +365,6 @@ def chat(user_input, hot_memory_note=None, msg_id=None):
 
     # CSAM check
     if csam.is_triggered(reply):
-        _csam_locked = True
         csam.handle(
             conversation  = memory.get_context(SYSTEM_PROMPT),
             trigger_input = user_input,
@@ -307,16 +372,16 @@ def chat(user_input, hot_memory_note=None, msg_id=None):
             speak_fn      = speak,
             print_fn      = lambda m: aura_socket.send_system_message(m, level="warning")
         )
+        # Add a brief refusal to memory so the conversation record isn't
+        # missing an assistant turn, and future calls know the topic was declined.
+        memory.add_message("assistant", "I'm not able to help with that, but I'm happy to help with anything else.")
         return None
-
-    if _csam_locked:
-        reply = "I've already shared resources that can help. I'm not able to discuss this further."
 
     memory.add_message("assistant", reply)
 
     # Fallback fact extraction — catches facts the LLM mentioned but didn't store via tool call
     from tools.user_profile import extract_and_store
-    extract_and_store(f"User: {user_input}\nAssistant: {reply}")
+    extract_and_store(user_input, reply)
 
     return reply
 
@@ -327,11 +392,9 @@ def _run_awareness_llm(prompt):
     and return the reply string, or None.  Uses the full system prompt + injected
     datetime so the LLM has complete context and can call tools if needed.
     """
-    if _csam_locked:
-        return None
-
+    _rebuild_if_dirty()
     _, _dt = tools.execute("get_system_info", {"query": "datetime"})
-    sys_prompt = SYSTEM_PROMPT + f"\n\nCURRENT SYSTEM TIME: {_dt}"
+    sys_prompt = SYSTEM_PROMPT + f"\n\nCURRENT SYSTEM TIME: {_dt}" + _upcoming_dates_note()
 
     messages = [
         {"role": "system", "content": sys_prompt},

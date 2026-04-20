@@ -1,5 +1,5 @@
 # tools/user_profile.py
-# User profile tool ÃÂÃÂ¢ÃÂÃÂÃÂÃÂ stores and retrieves facts Aether learns about the user.
+# User profile tool -- stores and retrieves facts Aether learns about the user.
 # Facts are persisted in SQLite with timestamps and confidence levels.
 
 import tools
@@ -10,24 +10,13 @@ from datetime import datetime
 
 ENDPOINT = None  # Set at runtime from db
 
-EXTRACT_PROMPT = """You are a fact extraction assistant. Given a conversation excerpt,
-extract any personal facts about the user that would be useful to remember long-term.
-Focus on: name, birthday, family members, job, location, preferences, important dates,
-hobbies, health, and any other personal details shared.
+# Callback wired by aura.py so it can rebuild SYSTEM_PROMPT when the profile changes.
+_on_profile_changed = None
 
-CRITICAL DATE RULE: Never store relative date words like "today", "tomorrow", "next Friday".
-Always resolve relative dates to absolute dates using the current date provided.
-For example: if today is April 10 and user says "today is my birthday", store "April 10".
-If user says "my birthday is next Friday" and today is April 6, store "April 10".
-Store dates in "Month DD" format e.g. "April 10", "December 25".
-
-Return ONLY a valid JSON array of objects, each with:
-- key: short snake_case label (e.g. "birthday", "wife_name", "job_title")
-- value: the fact value ÃÂ¢ÃÂÃÂ always use absolute dates, never relative ones
-- confidence: "high" if stated directly, "inferred" if calculated or implied
-
-If no new facts are found, return an empty array [].
-Return only the JSON array, no other text."""
+EXTRACT_PROMPT = """Extract ALL personal facts from the user's statement. Return one JSON object per fact — no limit on how many.
+Example: "I'm 40, live in Bristol with my wife Kate and our 3 kids, and I'm a plumber."
+Returns: [{"key":"age","value":"40"},{"key":"location","value":"Bristol"},{"key":"spouse_name","value":"Kate"},{"key":"num_children","value":"3"},{"key":"job_title","value":"plumber"}]
+Use absolute dates (e.g. "April 23 2005" not "last year"). Return [] if no personal facts. Return ONLY the JSON array, no other text."""
 
 def _get_endpoint():
     return db.get('home_pc_endpoint') or "http://localhost:8080/v1/chat/completions"
@@ -94,6 +83,12 @@ def _infer_year_from_duration(years_str):
 
 def store_fact(key, value, confidence="high", source="conversation"):
     """Store a fact about the user. Resolves dates, merges duration+date pairs."""
+    result = _store_fact_inner(key, value, confidence, source)
+    if _on_profile_changed:
+        _on_profile_changed()
+    return result
+
+def _store_fact_inner(key, value, confidence, source):
     import re
 
     # Resolve relative date references for date-related keys
@@ -160,42 +155,68 @@ def get_all_facts():
         return "No profile facts stored yet."
     return "\n".join([f"{f['key']}: {f['value']} ({f['confidence']})" for f in facts])
 
-def extract_and_store(conversation_text):
+def extract_and_store(user_input, assistant_reply=""):
     """
-    Run fact extraction on a conversation excerpt and store any new facts found.
-    Called automatically after each conversation turn.
+    Extract and store user facts from a conversation turn.
+    Accepts user_input and optional assistant_reply separately so the
+    assistant's rambling ("I'll store that...") doesn't confuse the extractor.
+    Strategy:
+      1. Scan assistant_reply for "Stored user fact: X" patterns — pass X to LLM
+      2. If no such patterns, extract from user_input directly
     Returns list of newly stored facts.
     """
+    import re as _re
     now = datetime.now().strftime("%A %B %d %Y")
-    prompt = f"Today's date is {now}.\n\nConversation:\n{conversation_text}"
-    try:
-        result = _llm([
-            {"role": "system", "content": EXTRACT_PROMPT},
-            {"role": "user",   "content": prompt}
-        ])
-        clean = result.strip()
-        if "```" in clean:
-            clean = clean.split("\n", 1)[1].rsplit("```", 1)[0]
-        facts = json.loads(clean)
-        stored = []
-        for fact in facts:
-            if "key" in fact and "value" in fact:
-                confidence = fact.get("confidence", "high")
-                store_fact(fact["key"], fact["value"], confidence=confidence, source="conversation")
-                stored.append(f"{fact['key']} = {fact['value']}")
-        if stored:
-            print(f"\r[Facts extracted: {', '.join(stored)}]")
-        return stored
-    except Exception as e:
-        print(f"\r[extract_and_store error: {e}]")
-        return []
+    stored = []
+
+    def _run_extraction(text):
+        prompt = f"Today's date is {now}.\nUser said: \"{text}\"\nExtract personal facts."
+        try:
+            result = _llm([
+                {"role": "system", "content": EXTRACT_PROMPT},
+                {"role": "user",   "content": prompt}
+            ])
+            clean = result.strip()
+            if "```" in clean:
+                lines = clean.split("\n")
+                clean = "\n".join(l for l in lines if not l.startswith("```")).strip()
+            facts = json.loads(clean)
+            for fact in facts:
+                if "key" in fact and "value" in fact:
+                    confidence = fact.get("confidence", "high")
+                    store_fact(fact["key"], fact["value"], confidence=confidence, source="conversation")
+                    stored.append(f"{fact['key']} = {fact['value']}")
+        except Exception as e:
+            print(f"\r[extract_and_store error: {e}]")
+
+    # Strategy 1: look for facts the assistant already identified in its reply
+    # Matches: "store that fact: X", "I'll update the fact: X", "stored user fact: X" etc.
+    if assistant_reply:
+        matches = _re.findall(
+            r'(?:store(?:d)?(?:\s+that)?(?:\s+user)?\s+fact|update(?:d)?(?:\s+the)?\s+fact)[s]?:?\s+["\']?(.+?)["\']?(?=\.(?:\s|$)|\n|$)',
+            assistant_reply,
+            _re.IGNORECASE
+        )
+        for m in matches:
+            m = m.strip()
+            if m:
+                _run_extraction(m)
+
+    # Strategy 2: extract from the user's own input (only if strategy 1 found nothing)
+    if not stored and user_input.strip():
+        _run_extraction(user_input.strip())
+
+    if stored:
+        print(f"\r[Facts extracted: {', '.join(stored)}]")
+    return stored
+
 
 def get_relevant_facts(topic):
     """Get facts relevant to a given topic or question."""
     facts = db.profile_get_all()
     if not facts:
         return "No profile information available."
-    # Simple keyword matching ÃÂÃÂ¢ÃÂÃÂÃÂÃÂ good enough for now
+    # Simple keyword matching -- good enough for now
     topic_lower = topic.lower()
     relevant = [f for f in facts if
                 topic_lower in f['key'].lower() or
@@ -204,7 +225,7 @@ def get_relevant_facts(topic):
         return "\n".join([f"{f['key']}: {f['value']}" for f in relevant])
     return "No specific information found for that topic."
 
-# Self-register ÃÂÃÂ¢ÃÂÃÂÃÂÃÂ two tools: read and write
+# Self-register -- two tools: read and write
 tools.register(
     name        = "store_user_fact",
     description = (

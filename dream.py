@@ -37,6 +37,10 @@ def dream(endpoint=None):
     if endpoint is None:
         endpoint = db.get('home_pc_endpoint') or "http://localhost:8080/v1/chat/completions"
 
+    # Flush any remaining hot messages into warm before consolidating
+    import memory
+    memory.flush_hot_to_warm()
+
     # Get raw facts
     raw_facts = db.profile_get_all()
     seen = {}
@@ -96,6 +100,9 @@ def dream(endpoint=None):
         for key, value in consolidated.items():
             if key and value:
                 db.profile_set(key, str(value), source="dream", confidence="high")
+
+        # Summaries are now in the profile — clear warm so it doesn't bloat context
+        db.warm_clear()
 
         print(f"\r[Dream: consolidated {len(consolidated)} facts]")
         print("\nYou: ", end="", flush=True)

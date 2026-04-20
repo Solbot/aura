@@ -116,6 +116,27 @@ def init_db():
             )
         """)
 
+        # Web search result cache
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS web_searches (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                query        TEXT NOT NULL,
+                results_json TEXT NOT NULL,
+                searched_at  TEXT NOT NULL
+            )
+        """)
+
+        # Fetched page content cache
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS web_cache (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                url        TEXT NOT NULL,
+                title      TEXT,
+                content    TEXT,
+                fetched_at TEXT NOT NULL
+            )
+        """)
+
         conn.commit()
 
 # --- Config ---
@@ -256,12 +277,12 @@ def reminder_mark_fired(reminder_id):
 
 def reminder_cancel(reminder_id):
     with get_connection() as conn:
-        conn.execute("UPDATE reminders SET fired = 1 WHERE id = ?", (reminder_id,))
+        conn.execute("DELETE FROM reminders WHERE id = ?", (reminder_id,))
         conn.commit()
 
 def reminder_cancel_all():
     with get_connection() as conn:
-        conn.execute("UPDATE reminders SET fired = 1 WHERE fired = 0")
+        conn.execute("DELETE FROM reminders WHERE fired = 0")
         conn.commit()
 
 def reminder_get_pending():
@@ -318,6 +339,38 @@ def warm_get_all():
         """).fetchall()
         return [dict(r) for r in rows]
 
+_STOP_WORDS = {
+    "the","and","for","are","was","that","this","with","have","from",
+    "they","will","been","were","their","what","when","your","can",
+    "had","her","his","him","she","but","not","you","all","who","did",
+    "how","its","our","out","one","get","use","has","him","more","also",
+}
+
+def _keywords(text, min_len=4):
+    return [w for w in text.lower().split() if len(w) >= min_len and w not in _STOP_WORDS]
+
+def warm_search(query_text, limit=3):
+    """Return warm summaries relevant to query_text via keyword matching."""
+    words = _keywords(query_text)
+    if not words:
+        return warm_get_recent(limit)
+    with get_connection() as conn:
+        conditions = " OR ".join(["LOWER(summary) LIKE ?" for _ in words])
+        params = [f"%{w}%" for w in words] + [limit]
+        rows = conn.execute(f"""
+            SELECT id, summary, message_count, created_at
+            FROM conversation_summaries
+            WHERE {conditions}
+            ORDER BY created_at DESC LIMIT ?
+        """, params).fetchall()
+        return [dict(r) for r in rows]
+
+def warm_clear():
+    """Delete all warm summaries (called after dream consolidates them into profile)."""
+    with get_connection() as conn:
+        conn.execute("DELETE FROM conversation_summaries")
+        conn.commit()
+
 # --- Cold memory (raw archive) ---
 
 def cold_append(role, content, session_id=None):
@@ -334,6 +387,21 @@ def cold_get_session(session_id):
             SELECT role, content, timestamp FROM conversation_archive
             WHERE session_id = ? ORDER BY timestamp ASC
         """, (session_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+def cold_search(query_text, limit=5):
+    """Return archived messages relevant to query_text via keyword matching."""
+    words = _keywords(query_text)
+    if not words:
+        return []
+    with get_connection() as conn:
+        conditions = " OR ".join(["LOWER(content) LIKE ?" for _ in words])
+        params = [f"%{w}%" for w in words] + [limit]
+        rows = conn.execute(f"""
+            SELECT role, content, timestamp FROM conversation_archive
+            WHERE {conditions}
+            ORDER BY timestamp DESC LIMIT ?
+        """, params).fetchall()
         return [dict(r) for r in rows]
 
 # --- Scheduled tasks ---
@@ -380,6 +448,58 @@ def task_get_active():
             SELECT * FROM scheduled_tasks WHERE active = 1
         """).fetchall()
         return [dict(r) for r in rows]
+
+
+# --- Web search cache ---
+
+def web_search_store(query, results):
+    """Store a list of search result dicts for a query."""
+    import json
+    with get_connection() as conn:
+        conn.execute("""
+            INSERT INTO web_searches (query, results_json, searched_at)
+            VALUES (?, ?, ?)
+        """, (query, json.dumps(results), datetime.now().isoformat()))
+        conn.commit()
+
+def web_search_get_recent(limit=5):
+    """Return the most recent search queries and their results."""
+    import json
+    with get_connection() as conn:
+        rows = conn.execute("""
+            SELECT query, results_json, searched_at FROM web_searches
+            ORDER BY searched_at DESC LIMIT ?
+        """, (limit,)).fetchall()
+        out = []
+        for r in rows:
+            out.append({
+                "query":       r["query"],
+                "results":     json.loads(r["results_json"]),
+                "searched_at": r["searched_at"],
+            })
+        return out
+
+def web_cache_store(url, title, content):
+    """Store fetched page content, replacing any existing entry for the same URL."""
+    with get_connection() as conn:
+        conn.execute("DELETE FROM web_cache WHERE url = ?", (url,))
+        conn.execute("""
+            INSERT INTO web_cache (url, title, content, fetched_at)
+            VALUES (?, ?, ?, ?)
+        """, (url, title, content, datetime.now().isoformat()))
+        conn.commit()
+
+def web_cache_get(url, max_age_hours=1):
+    """Return cached page dict if fetched within max_age_hours, else None."""
+    from datetime import timedelta
+    cutoff = (datetime.now() - timedelta(hours=max_age_hours)).isoformat()
+    with get_connection() as conn:
+        row = conn.execute("""
+            SELECT title, content, fetched_at FROM web_cache
+            WHERE url = ? AND fetched_at > ?
+            ORDER BY fetched_at DESC LIMIT 1
+        """, (url, cutoff)).fetchone()
+        return dict(row) if row else None
 
 
 if __name__ == "__main__":

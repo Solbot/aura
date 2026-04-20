@@ -1,0 +1,16 @@
+{
+  "order": [
+    "memory",
+    "connection",
+    "clock",
+    "cpu_temp",
+    "conversation"
+  ],
+  "heights": {
+    "memory": 265,
+    "connection": 265,
+    "clock": 265,
+    "cpu_temp": 265,
+    "conversation": 265
+  }
+}

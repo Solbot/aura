@@ -81,4 +81,4 @@ def load_all():
     from tools import user_profile  # noqa: F401
     from tools import tasks         # noqa: F401
     from tools import reminders     # noqa: F401
-    # Add new tool imports here as they are created
+    from tools import web_search    # noqa: F401

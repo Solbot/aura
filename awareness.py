@@ -32,6 +32,10 @@ _aether_busy   = False  # Set True while the LLM is active
 _last_busy_end = 0.0    # Timestamp when last LLM call completed
 DREAM_COOLDOWN = 10     # Seconds to wait after LLM finishes before dreaming
 
+# Callback wired by aura.py to rebuild SYSTEM_PROMPT after the dream cycle
+# updates the user profile.
+_on_dream_complete = None
+
 
 def set_busy(busy):
     """Called by aura.py to signal when LLM is active."""
@@ -175,6 +179,8 @@ def _check_dream():
             dream.dream(endpoint)
             db.dream_complete()
             _dream_running = False
+            if _on_dream_complete:
+                _on_dream_complete()
     except Exception:
         _dream_running = False
 
