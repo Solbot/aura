@@ -3,6 +3,15 @@
 
 import sys
 import os
+import glob
+
+# gi (PyGObject) lives in the system Python; STT packages live in the venv.
+# Inject the venv site-packages so both are available under system python3.
+for _sp in glob.glob(
+    os.path.expanduser("~/aura/venv/lib/python3*/site-packages")
+):
+    if _sp not in sys.path:
+        sys.path.insert(0, _sp)
 import json
 import socket
 import sqlite3
@@ -13,6 +22,12 @@ from datetime import datetime
 import gi
 gi.require_version('Gtk', '4.0')
 from gi.repository import Gtk, GLib, Gdk, Pango, Gio
+
+try:
+    import stt as _stt
+    _STT_AVAILABLE = _stt.available()
+except Exception:
+    _STT_AVAILABLE = False
 
 SOCKET_PATH = "/tmp/aura.sock"
 DB_PATH     = os.path.expanduser("~/aura/aura.db")
@@ -74,15 +89,20 @@ label {
     color: #1ab380;
     font-size: 15px;
 }
-.connecting { color: #e69910; }
+.connecting  { color: #e69910; }
 .connected   { color: #1ab380; }
 .disconnected{ color: #e63333; }
-.dim  { color: #8888aa; }
-.warn { color: #e69910; }
-.err  { color: #e63333; }
-.msg-user { color: #d0d0ff; font-size: 14px; }
-.msg-aura { color: #f0f0f0; font-size: 14px; }
-.status-msg { color: #6868a0; font-size: 12px; font-style: italic; }
+.dim         { color: #8888aa; }
+.warn        { color: #e69910; }
+.err         { color: #e63333; }
+.msg-user    { color: #d0d0ff; font-size: 14px; }
+.msg-aura    { color: #f0f0f0; font-size: 14px; }
+.status-msg  { color: #6868a0; font-size: 12px; font-style: italic; }
+.stt-icon    { color: #8888aa; font-size: 13px; }
+.stt-icon.listening { color: #1ab380; }
+.stt-state   { color: #1ab380; font-size: 11px; font-style: italic; margin-left: 2px; }
+.stt-loading { color: #8888aa; font-size: 11px; font-style: italic; margin-left: 2px; }
+.mic-selector label { color: #000000; font-size: 13px; }
 """
 
 
@@ -158,6 +178,15 @@ class AuraWindow(Gtk.ApplicationWindow):
         self._assistant_name = self._db_get("assistant_name")      or "Aura"
         self._user_name      = self._db_get("user_informal_name")  or "You"
 
+        # STT state
+        self._listener        = None
+        self._mic_options     = [("Default", "")]  # [(display_label, full_device_name)]
+        self._mic_dropdown    = None
+        self._mic_header_box  = None   # container for all header mic widgets
+        self._stt_icon_lbl    = None   # 🎤 label — CSS class changes with state
+        self._stt_state_lbl   = None   # "loading…" / "● listening" — hidden when idle
+        self._mic_populating  = False  # suppress notify::selected during programmatic set
+
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.set_child(root)
 
@@ -173,12 +202,15 @@ class AuraWindow(Gtk.ApplicationWindow):
         self._tick_clock()
         self._tick_sysinfo()
 
-        # F11: toggle fullscreen (window action)
+        if _STT_AVAILABLE:
+            GLib.idle_add(self._populate_mic_selector)
+
+        # F11: toggle fullscreen
         fs_action = Gio.SimpleAction.new("toggle-fullscreen", None)
         fs_action.connect("activate", lambda *_: self._toggle_fullscreen())
         self.add_action(fs_action)
 
-        # Ctrl+Q: quit (application action)
+        # Ctrl+Q: quit
         quit_action = Gio.SimpleAction.new("quit", None)
         quit_action.connect("activate", lambda *_: self.get_application().quit())
         self.get_application().add_action(quit_action)
@@ -188,7 +220,7 @@ class AuraWindow(Gtk.ApplicationWindow):
 
         self.fullscreen()
 
-    # --- DB ---
+    # ------------------------------------------------------------------ DB --
 
     def _db_get(self, key):
         try:
@@ -198,7 +230,15 @@ class AuraWindow(Gtk.ApplicationWindow):
         except Exception:
             return None
 
-    # --- Layout ---
+    def _db_set(self, key, value):
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.execute("UPDATE config SET value=? WHERE key=?", (value, key))
+                conn.commit()
+        except Exception:
+            pass
+
+    # --------------------------------------------------------------- Layout --
 
     def _build_header(self, parent):
         bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
@@ -212,6 +252,38 @@ class AuraWindow(Gtk.ApplicationWindow):
         spacer = Gtk.Box()
         spacer.set_hexpand(True)
         bar.append(spacer)
+
+        if _STT_AVAILABLE:
+            # All mic widgets in one box — hide the whole box when no device.
+            # Positioned left of connection status so it's always visible.
+            self._mic_header_box = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+
+            # Mic icon — CSS class changes to reflect listener state
+            self._stt_icon_lbl = Gtk.Label(label="🎤")
+            self._stt_icon_lbl.add_css_class("stt-icon")
+            self._mic_header_box.append(self._stt_icon_lbl)
+
+            # State text — hidden when idle; shows "loading…" / "● listening"
+            self._stt_state_lbl = Gtk.Label(label="loading…")
+            self._stt_state_lbl.add_css_class("stt-loading")
+            self._mic_header_box.append(self._stt_state_lbl)
+
+            # Device selector — populated by _populate_mic_selector
+            # new_from_strings sets up the PropertyExpression automatically so
+            # item labels are actually rendered inside the dropdown button.
+            self._mic_dropdown = Gtk.DropDown.new_from_strings(["Default"])
+            self._mic_dropdown.set_hexpand(False)
+            self._mic_dropdown.add_css_class("mic-selector")
+            self._mic_dropdown.connect("notify::selected", self._on_mic_selected)
+            self._mic_header_box.append(self._mic_dropdown)
+
+            sep_mic = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
+            sep_mic.set_margin_start(6)
+            sep_mic.set_margin_end(6)
+            self._mic_header_box.append(sep_mic)
+
+            bar.append(self._mic_header_box)
 
         self._conn_lbl = Gtk.Label(label="Connecting...")
         self._conn_lbl.add_css_class("connecting")
@@ -251,8 +323,7 @@ class AuraWindow(Gtk.ApplicationWindow):
         self._chat.set_margin_start(16)
         self._chat.set_margin_end(16)
 
-        # Expanding spacer pushes messages to the bottom when content is sparse,
-        # without the layout instability of valign=END on a ScrolledWindow child.
+        # Expanding spacer pushes messages to the bottom when content is sparse.
         self._chat_spacer = Gtk.Box()
         self._chat_spacer.set_vexpand(True)
         self._chat.append(self._chat_spacer)
@@ -261,14 +332,15 @@ class AuraWindow(Gtk.ApplicationWindow):
         parent.append(self._scroll)
         self._vadj = self._scroll.get_vadjustment()
 
-        # Scroll to bottom whenever content height changes (new message, wrap reflow, etc.)
-        self._vadj.connect("changed", lambda adj: adj.set_value(adj.get_upper() - adj.get_page_size()))
+        self._vadj.connect(
+            "changed",
+            lambda adj: adj.set_value(adj.get_upper() - adj.get_page_size()),
+        )
 
     def _build_input(self, parent):
         bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         bar.add_css_class("input-bar")
 
-        # Overlay lets us show a placeholder label over the empty TextView
         overlay = Gtk.Overlay()
         overlay.set_hexpand(True)
 
@@ -301,7 +373,7 @@ class AuraWindow(Gtk.ApplicationWindow):
         self._placeholder.set_sensitive(False)
         self._entry.get_buffer().connect(
             "changed",
-            lambda buf: self._placeholder.set_visible(buf.get_char_count() == 0)
+            lambda buf: self._placeholder.set_visible(buf.get_char_count() == 0),
         )
 
         input_scroll.set_child(self._entry)
@@ -318,7 +390,141 @@ class AuraWindow(Gtk.ApplicationWindow):
         parent.append(bar)
         GLib.idle_add(lambda: self._entry.grab_focus() or False)
 
-    # --- Chat ---
+    # ----------------------------------------------------------------- STT --
+
+    def _populate_mic_selector(self):
+        """Populate device dropdown; hide mic UI if no devices; start listener."""
+        if not _STT_AVAILABLE or self._mic_dropdown is None:
+            return False
+        try:
+            devices = _stt.list_input_devices()
+            if not devices:
+                self._hide_mic_ui()
+                return False
+
+            options = [("Default", "")]
+            for name, _ in devices:
+                short = name.split(":")[0].strip()
+                if len(short) > 20:
+                    short = short[:18] + "…"
+                options.append((short, name))
+            self._mic_options = options
+
+            # Block notify::selected for the entire model/selection setup
+            self._mic_populating = True
+            new_model = Gtk.StringList.new([o[0] for o in options])
+            self._mic_dropdown.set_model(new_model)
+            # Re-apply the expression so labels stay visible after model swap.
+            expr = Gtk.PropertyExpression.new(Gtk.StringObject, None, "string")
+            self._mic_dropdown.set_expression(expr)
+
+            # Restore saved preference
+            saved = self._db_get("stt_microphone") or ""
+            for i, (_, full_name) in enumerate(options):
+                if full_name == saved:
+                    self._mic_dropdown.set_selected(i)
+                    break
+            self._mic_populating = False
+
+            self._start_background_listener(saved)
+
+        except Exception as e:
+            print(f"[stt] populate_mic_selector: {e}")
+            self._hide_mic_ui()
+        return False
+
+    def _hide_mic_ui(self):
+        """Hide all STT header widgets — called when no microphone is available."""
+        if self._mic_header_box:
+            self._mic_header_box.set_visible(False)
+
+    def _start_background_listener(self, device_name):
+        """Stop any existing listener and start a fresh one for device_name."""
+        if self._listener:
+            self._listener.stop()
+            self._listener = None
+
+        assistant = self._db_get("assistant_name") or "Aura"
+        name      = assistant.lower()
+        phrases   = [name, f"hey {name}", f"hey, {name}"]
+        model_sz  = self._db_get("stt_model") or "tiny"
+
+        # Show "loading…" while the model warms up
+        self._set_stt_state("loading")
+
+        self._listener = _stt.BackgroundListener(
+            wake_phrases=phrases,
+            on_wake      = lambda: GLib.idle_add(self._on_stt_wake),
+            on_transcript= lambda t: GLib.idle_add(self._on_stt_transcript, t),
+            on_idle      = lambda: GLib.idle_add(self._on_stt_idle),
+            on_ready     = lambda: GLib.idle_add(self._on_stt_ready),
+            device_name  = device_name,
+            model_size   = model_sz,
+        )
+        self._listener.start()
+
+    # STT state callbacks (all called on the GTK main thread via GLib.idle_add)
+
+    def _on_stt_ready(self):
+        """Model loaded and stream open — show idle state."""
+        self._set_stt_state("idle")
+        return GLib.SOURCE_REMOVE
+
+    def _on_stt_wake(self):
+        """Wake phrase detected — show listening indicator."""
+        self._set_stt_state("listening")
+        return GLib.SOURCE_REMOVE
+
+    def _on_stt_idle(self):
+        """Returned to idle after sending transcript (or on startup)."""
+        self._set_stt_state("idle")
+        return GLib.SOURCE_REMOVE
+
+    def _on_stt_transcript(self, text):
+        """Auto-send the transcribed text as a user message."""
+        if text:
+            self._add_message("user", text)
+            if self._sock.connected:
+                self._msg_id += 1
+                self._sock.send({"type": "chat_input", "text": text,
+                                 "id": str(self._msg_id)})
+            else:
+                self._add_status("Not connected to Aura", "err")
+        return GLib.SOURCE_REMOVE
+
+    def _set_stt_state(self, state):
+        """Update the header mic icon and state label for state in
+        {loading, idle, listening}."""
+        if not self._stt_icon_lbl or not self._stt_state_lbl:
+            return
+        if state == "loading":
+            self._stt_icon_lbl.remove_css_class("listening")
+            self._stt_state_lbl.set_text("loading…")
+            self._stt_state_lbl.remove_css_class("stt-state")
+            self._stt_state_lbl.add_css_class("stt-loading")
+            self._stt_state_lbl.set_visible(True)
+        elif state == "listening":
+            self._stt_icon_lbl.add_css_class("listening")
+            self._stt_state_lbl.set_text("● listening")
+            self._stt_state_lbl.remove_css_class("stt-loading")
+            self._stt_state_lbl.add_css_class("stt-state")
+            self._stt_state_lbl.set_visible(True)
+        else:  # idle
+            self._stt_icon_lbl.remove_css_class("listening")
+            self._stt_state_lbl.set_visible(False)
+
+    def _on_mic_selected(self, dropdown, _pspec):
+        """Save chosen device to config and restart the background listener."""
+        if self._mic_populating:
+            return
+        idx = dropdown.get_selected()
+        if idx == Gtk.INVALID_LIST_POSITION or idx >= len(self._mic_options):
+            return
+        _, full_name = self._mic_options[idx]
+        self._db_set("stt_microphone", full_name)
+        self._start_background_listener(full_name)
+
+    # --------------------------------------------------------------- Chat --
 
     def _add_message(self, role, text):
         name   = self._user_name if role == "user" else self._assistant_name
@@ -344,7 +550,7 @@ class AuraWindow(Gtk.ApplicationWindow):
         lbl.add_css_class(css)
         self._chat.append(lbl)
 
-    # --- Input ---
+    # -------------------------------------------------------------- Input --
 
     def _on_entry_key(self, ctrl, keyval, keycode, state):
         if keyval == Gdk.KEY_Return and not (state & Gdk.ModifierType.SHIFT_MASK):
@@ -365,7 +571,7 @@ class AuraWindow(Gtk.ApplicationWindow):
         else:
             self._add_status("Not connected to Aura", "err")
 
-    # --- Socket messages ---
+    # ---------------------------------------------------- Socket messages --
 
     def _on_socket_msg(self, msg):
         t = msg.get("type")
@@ -379,6 +585,12 @@ class AuraWindow(Gtk.ApplicationWindow):
             for c in ("connecting", "connected"):
                 self._conn_lbl.remove_css_class(c)
             self._conn_lbl.add_css_class("disconnected")
+        elif t == "tts_start":
+            if self._listener:
+                self._listener.mute()
+        elif t == "tts_end":
+            if self._listener:
+                self._listener.unmute()
         elif t == "chat_response":
             text = msg.get("text", "")
             if text:
@@ -395,7 +607,7 @@ class AuraWindow(Gtk.ApplicationWindow):
                 self._mem_lbl.set_text(f"{val} MB")
         return GLib.SOURCE_REMOVE
 
-    # --- System info ---
+    # -------------------------------------------------------- System info --
 
     def _tick_clock(self):
         self._clock_lbl.set_text(datetime.now().strftime("%H:%M"))
@@ -453,6 +665,8 @@ class AuraWindow(Gtk.ApplicationWindow):
             self._is_fullscreen = True
 
     def do_close_request(self):
+        if self._listener:
+            self._listener.stop()
         self._sock.stop()
         return False
 

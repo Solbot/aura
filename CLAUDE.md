@@ -1,21 +1,27 @@
 # AURA — Codebase Guide
 
-AURA is an AI companion running on a Raspberry Pi 5. It combines local LLM inference, persistent memory, hardware awareness, and a GTK4 UI.
+AURA is an AI companion running on a Raspberry Pi 5. It combines local LLM inference, persistent memory, hardware awareness, a GTK4 UI, and always-on speech-to-text.
 
 ## Architecture
 
 ```
-start_ui.sh
-├── aura.py          (core — LLM loop, tool execution, memory management)
+systemd
+├── aura.service      → venv/bin/python aura.py
+└── aura-ui.service   → launch_ui.sh → python3 aura_gtk.py
+
+aura.py          (core — LLM loop, tool execution, memory management)
 │   ├── aura_socket  (Unix socket IPC to UI)
 │   ├── awareness    (background thread — reminders, temperature, dream)
 │   ├── memory       (hot/warm/cold three-tier memory)
 │   ├── tools/       (function-calling tool registry)
 │   └── db           (SQLite — all persistence)
-└── aura_gtk.py      (GTK4 UI — connects to aura via /tmp/aura.sock)
+aura_gtk.py      (GTK4 UI — connects to aura via /tmp/aura.sock)
+│   └── stt.py       (BackgroundListener — always-on wake-word STT)
 ```
 
 Two separate processes communicate over a Unix domain socket at `/tmp/aura.sock`. `aura.py` owns all LLM logic; `aura_gtk.py` is pure display and input.
+
+Both processes are managed by systemd (`aura.service`, `aura-ui.service`) and start automatically on boot. `aura-ui.service` requires `aura.service` and polls for `/tmp/aura.sock` before launching the UI.
 
 ## LLM Endpoint Selection
 
@@ -81,6 +87,45 @@ Background awareness notes (date changes, birthdays) are retrieved from `hot_mem
 - **Quiet hours** suppress date-event notes only. Reminders and scheduled tasks are always delivered.
 - **`birth_year`** is handled both via `_DURATION_TO_DATE` (merging it into birthday when birthday lacks a year) and via a special case lower in `store_fact`. The `_DURATION_TO_DATE` path returns early, so the special case is only reached when no birthday fact exists yet.
 
+## Speech-to-Text (`stt.py`)
+
+Always-on wake-word listener running as a daemon thread inside `aura_gtk.py`.
+
+**Dependencies** (installed in venv): `faster-whisper`, `sounddevice`. System package: `libportaudio2`.
+
+**ALSA configuration** — `/etc/asound.conf` must exist and route `pcm.!default` capture to the USB mic (`hw:2,0`). Without it, PortAudio cannot enumerate the USB capture device. Card assignments on this machine: 0 = vc4-hdmi-0, 1 = vc4-hdmi-1, 2 = QuickCam Pro 9000.
+
+**Config keys** (db):
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `stt_enabled` | `1` | STT on/off |
+| `stt_microphone` | `""` | Device name; empty = first available input device |
+| `stt_model` | `tiny` | Whisper model size (`tiny`/`base`/`small`) |
+
+**`BackgroundListener` state machine:**
+
+- **idle** — maintains a rolling 2 s audio ring buffer (deque). Every 1 s (50% overlap) the window is evaluated: if RMS > `ENERGY_FLOOR` (0.015) it is transcribed with Whisper and checked for a wake phrase.
+- **active** — records continuously once wake phrase detected; after `SILENCE_NEEDED` (2.5 s) of consecutive RMS < `ENERGY_FLOOR`, transcribes the full buffer, strips the wake phrase, and fires `on_transcript(text)`.
+
+The 50% sliding window prevents wake words from being missed when they straddle a window boundary.
+
+**Audio capture** — uses `sd.InputStream` in **callback mode**: the PortAudio callback puts every 0.5 s block into a `queue.Queue`, while the main STT thread drains the queue. This eliminates XRUN audio loss that occurred with blocking `stream.read()` during long Whisper inference.
+
+**Whisper settings** — `language="en"`, `initial_prompt="Hey {name},"`, `condition_on_previous_text=False`. The initial prompt primes the model to spell the assistant's name correctly; disabling context conditioning prevents hallucinations from one window leaking into the next. `vad_filter=True` for both idle and active passes.
+
+**Wake phrases** are built from `assistant_name` (DB config): `"aura"`, `"hey aura"`, `"hey, aura"`. Matching is case-insensitive and allows up to 15 chars of leading noise.
+
+**TTS muting** — `BackgroundListener` exposes `mute()` / `unmute()`. `aura.py` sends `{"type": "tts_start"}` before `aplay` and `{"type": "tts_end"}` after; `aura_gtk.py` calls the appropriate method on the active listener. This prevents AURA's own voice from triggering wake detection. `unmute()` also resets the state machine to `idle` so any audio captured during TTS is discarded.
+
+**Device selection** — `resolve_device("")` falls back to the first enumerated input device. With `/etc/asound.conf` in place, `sysdefault` routes capture to the USB mic and is enumerated as an input device.
+
+**Model storage** — Whisper model downloaded on first use to `~/models/whisper/` (~40 MB for tiny).
+
+**GTK integration** — all `BackgroundListener` callbacks are invoked from the background thread; callers wrap them in `GLib.idle_add`. The `_mic_populating` flag suppresses spurious `notify::selected` signals during programmatic dropdown setup.
+
+**UI indicator** — header bar shows `🎤 [device dropdown]`; state label shows `loading…` during model load and `● listening` (green) while in active phase.
+
 ## Database
 
 Single SQLite file at `~/aura/aura.db`. All access goes through `db.py` — never open the DB directly from other modules.
@@ -91,21 +136,42 @@ Tables: `config`, `user_profile`, `reminders`, `scheduled_tasks`, `conversation_
 
 Connects to `/tmp/aura.sock` as a client. All socket messages are JSON lines.
 
+**Socket protocol (Aura → UI):**
+
+| Type | Fields | Effect |
+|------|--------|--------|
+| `chat_response` | `text`, `id` | Append AURA message bubble |
+| `system_message` | `text`, `level` | Append status line |
+| `status_update` | `key`, `value` | Update header bar widget |
+| `tts_start` | — | Mute STT wake detection |
+| `tts_end` | — | Unmute STT; discard active buffer |
+| `ui_command` | `tool`, `args` | Execute a UI tool |
+| `ui_query` | `filter`, `request_id` | Query tile state |
+
 Layout (top to bottom):
-1. **Header bar** — assistant name, connection status, clock, CPU temp, RAM
-2. **Chat scroll area** — `Gtk.ScrolledWindow` with a `Gtk.Box` child; an expanding spacer at the top of the box pushes messages to the bottom when content is sparse. Auto-scrolls to bottom via `vadjustment.connect("changed", ...)`.
+1. **Header bar** — assistant name · `🎤` mic selector · connection status · clock · CPU temp · RAM
+2. **Chat scroll area** — `Gtk.ScrolledWindow` with a `Gtk.Box` child; an expanding spacer at the top pushes messages to the bottom. Auto-scrolls via `vadjustment.connect("changed", ...)`.
 3. **Input bar** — `Gtk.TextView` (wrapping, Shift+Enter for newline, Enter to send) in a `Gtk.Frame`, with a placeholder label overlaid via `Gtk.Overlay`.
 
-All chat labels have `set_hexpand(True)` and `set_wrap(True)` so long messages reflow within the column width rather than expanding horizontally.
+All chat labels have `set_hexpand(True)` and `set_wrap(True)` so long messages reflow within the column width.
+
+The mic dropdown uses `Gtk.DropDown.new_from_strings()` (not `Gtk.DropDown(model=...)`) because only `new_from_strings` sets up the `PropertyExpression` needed to render `StringObject` items.
+
+## Python Path
+
+The UI runs under system `python3` (which owns `gi`/GTK) but needs venv packages for STT. `launch_ui.sh` sets `PYTHONPATH` to the venv site-packages before exec. `aura_gtk.py` also injects the same path at the top of the file as a fallback for manual invocation.
 
 ## Running
 
 ```bash
-cd ~/aura
-./start_ui.sh        # starts aura.py + aura_gtk.py
-# or individually:
-python3 aura.py      # core (blocks)
-python3 aura_gtk.py  # UI (blocks)
+# Managed by systemd (normal operation):
+sudo systemctl start aura        # backend
+sudo systemctl start aura-ui     # UI (waits for backend socket)
+
+# Manual (development):
+cd ~/aura/aura
+venv/bin/python3 aura.py         # backend
+./launch_ui.sh                   # UI (sets env, then exec python3 aura_gtk.py)
 ```
 
 First boot runs `first_boot.py` which requires a reachable LLM endpoint to complete the onboarding conversation.

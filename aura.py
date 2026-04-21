@@ -35,12 +35,14 @@ def speak(text):
     if db.get('audio_enabled') == '0':
         return
     audio = b"".join(chunk.audio_int16_bytes for chunk in voice.synthesize(text))
+    aura_socket.send({"type": "tts_start"})
     proc  = subprocess.Popen(
         ["aplay", "-q", "-f", "S16_LE", "-r", str(SAMPLE_RATE),
          "-c", "1", "-t", "raw", "-D", AUDIO_DEVICE, "-"],
         stdin=subprocess.PIPE
     )
     proc.communicate(input=audio)
+    aura_socket.send({"type": "tts_end"})
 
 # --- Start IPC socket server (must be up before first boot so the UI can connect) ---
 aura_socket.start()
@@ -119,6 +121,11 @@ def build_system_prompt():
         "and a natural-language 'when' (e.g. 'in 30 minutes', 'tomorrow at 9am', "
         "'next friday afternoon'). Use list_reminders to show pending ones, "
         "cancel_reminder to remove them.\n"
+        "- NOTES: Use create_note when the user wants to save a note, jot something down, "
+        "or start a list. Use list_notes to show all notes, get_note to show a specific note "
+        "in full, update_note to edit title or body, delete_note to remove a note. "
+        "For list items within a note: add_list_item to append, update_list_item to edit text "
+        "or check/uncheck an item, remove_list_item to delete one item.\n"
         + _web_search_rules()
     )
 

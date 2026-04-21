@@ -82,3 +82,4 @@ def load_all():
     from tools import tasks         # noqa: F401
     from tools import reminders     # noqa: F401
     from tools import web_search    # noqa: F401
+    from tools import notes         # noqa: F401

@@ -199,12 +199,46 @@ def handle(user_input, system_prompt, assistant_name):
 
     if cmd == "/reboot":
         def _do_reboot():
-            import time, subprocess
+            import time, subprocess, os, glob, signal
             time.sleep(1.5)
-            # Restart UI first (independent service), then the main daemon.
-            # systemd handles both; Restart=always brings them back cleanly.
-            subprocess.run(['sudo', 'systemctl', 'restart', 'aura-ui'], check=False)
-            subprocess.run(['sudo', 'systemctl', 'restart', 'aura'],    check=False)
+
+            aura_dir = os.path.dirname(os.path.abspath(__file__))
+
+            # ── Restart UI ──────────────────────────────────────────────────
+            # Try systemd first; fall back to direct kill + spawn for
+            # sessions started via start_ui.sh rather than the service.
+            r = subprocess.run(
+                ['sudo', 'systemctl', 'restart', 'aura-ui'], check=False)
+            if r.returncode != 0:
+                subprocess.run(['pkill', '-f', 'python.*aura_gtk'], check=False)
+                time.sleep(0.5)
+
+                uid = os.getuid()
+                wayland_dir = f'/run/user/{uid}'
+                socks = [s for s in glob.glob(f'{wayland_dir}/wayland-*')
+                         if 'lock' not in s]
+                env = dict(os.environ)
+                if socks:
+                    env['WAYLAND_DISPLAY'] = os.path.basename(socks[0])
+                env['XDG_RUNTIME_DIR'] = wayland_dir
+                env['PYTHONUNBUFFERED'] = '1'
+
+                log_path = os.path.join(aura_dir, 'logs', 'ui.log')
+                os.makedirs(os.path.dirname(log_path), exist_ok=True)
+                with open(log_path, 'a') as lf:
+                    subprocess.Popen(
+                        ['python3', os.path.join(aura_dir, 'aura_gtk.py')],
+                        cwd=aura_dir, env=env, stdout=lf, stderr=lf,
+                    )
+
+            # ── Restart backend ─────────────────────────────────────────────
+            r = subprocess.run(
+                ['sudo', 'systemctl', 'restart', 'aura'], check=False)
+            if r.returncode != 0:
+                # Not managed by systemd — SIGTERM self; start_ui.sh will
+                # detect the exit and the user can restart the script.
+                os.kill(os.getpid(), signal.SIGTERM)
+
         import threading
         threading.Thread(target=_do_reboot, daemon=True).start()
         return "\n[Rebooting — Aura services will restart momentarily.]\n"
@@ -224,8 +258,9 @@ def handle(user_input, system_prompt, assistant_name):
                 "  To confirm: /wipe confirm\n"
             )
         def _do_wipe():
-            import time, subprocess, os, glob
+            import time, subprocess, os, glob, signal
             time.sleep(1.5)
+            aura_dir = os.path.dirname(os.path.abspath(__file__))
             # Remove database
             db_path = os.path.expanduser("~/aura/aura.db")
             try:
@@ -239,9 +274,32 @@ def handle(user_input, system_prompt, assistant_name):
                     os.remove(log_file)
                 except Exception:
                     pass
-            # Restart UI first, then the main daemon — same as /reboot
-            subprocess.run(['sudo', 'systemctl', 'restart', 'aura-ui'], check=False)
-            subprocess.run(['sudo', 'systemctl', 'restart', 'aura'],    check=False)
+            # Restart UI + backend — same logic as /reboot
+            r = subprocess.run(
+                ['sudo', 'systemctl', 'restart', 'aura-ui'], check=False)
+            if r.returncode != 0:
+                subprocess.run(['pkill', '-f', 'python.*aura_gtk'], check=False)
+                time.sleep(0.5)
+                uid = os.getuid()
+                wayland_dir = f'/run/user/{uid}'
+                socks = [s for s in glob.glob(f'{wayland_dir}/wayland-*')
+                         if 'lock' not in s]
+                env = dict(os.environ)
+                if socks:
+                    env['WAYLAND_DISPLAY'] = os.path.basename(socks[0])
+                env['XDG_RUNTIME_DIR'] = wayland_dir
+                env['PYTHONUNBUFFERED'] = '1'
+                log_path = os.path.join(aura_dir, 'logs', 'ui.log')
+                os.makedirs(os.path.dirname(log_path), exist_ok=True)
+                with open(log_path, 'a') as lf:
+                    subprocess.Popen(
+                        ['python3', os.path.join(aura_dir, 'aura_gtk.py')],
+                        cwd=aura_dir, env=env, stdout=lf, stderr=lf,
+                    )
+            r = subprocess.run(
+                ['sudo', 'systemctl', 'restart', 'aura'], check=False)
+            if r.returncode != 0:
+                os.kill(os.getpid(), signal.SIGTERM)
         import threading
         threading.Thread(target=_do_wipe, daemon=True).start()
         return (

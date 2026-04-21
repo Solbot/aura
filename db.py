@@ -33,6 +33,9 @@ DEFAULTS = {
     "critical_temp_threshold":("80",                   "CPU temp threshold for warnings (C)",     1),
     "audio_enabled":          ("1",                    "TTS audio output enabled (1=on, 0=off)",  1),
     "debug_tools":            ("0",                    "Print tool call args and results to console (1=on)", 1),
+    "stt_enabled":            ("1",                    "STT voice input enabled (1=on, 0=off)",   1),
+    "stt_microphone":         ("",                     "STT default microphone device name (empty=system default)", 1),
+    "stt_model":              ("tiny",                 "Whisper model size: tiny/base/small",     1),
 }
 
 def get_connection():
@@ -134,6 +137,28 @@ def init_db():
                 title      TEXT,
                 content    TEXT,
                 fetched_at TEXT NOT NULL
+            )
+        """)
+
+        # Notes: freeform items with optional list items
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS notes (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                title      TEXT NOT NULL,
+                body       TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS note_items (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                note_id    INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+                position   INTEGER NOT NULL DEFAULT 0,
+                text       TEXT NOT NULL,
+                checked    INTEGER DEFAULT 0,
+                created_at TEXT NOT NULL
             )
         """)
 
@@ -500,6 +525,91 @@ def web_cache_get(url, max_age_hours=1):
             ORDER BY fetched_at DESC LIMIT 1
         """, (url, cutoff)).fetchone()
         return dict(row) if row else None
+
+
+# --- Notes ---
+
+def note_create(title, body=""):
+    now = datetime.now().isoformat()
+    with get_connection() as conn:
+        cur = conn.execute(
+            "INSERT INTO notes (title, body, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            (title, body, now, now)
+        )
+        conn.commit()
+        return cur.lastrowid
+
+def note_list():
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT id, title, created_at, updated_at FROM notes ORDER BY updated_at DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+def note_get(note_id):
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM notes WHERE id = ?", (note_id,)).fetchone()
+        if not row:
+            return None
+        note = dict(row)
+        items = conn.execute(
+            "SELECT * FROM note_items WHERE note_id = ? ORDER BY position ASC, id ASC",
+            (note_id,)
+        ).fetchall()
+        note["items"] = [dict(i) for i in items]
+        return note
+
+def note_update(note_id, title=None, body=None):
+    with get_connection() as conn:
+        if title is not None:
+            conn.execute("UPDATE notes SET title = ?, updated_at = ? WHERE id = ?",
+                         (title, datetime.now().isoformat(), note_id))
+        if body is not None:
+            conn.execute("UPDATE notes SET body = ?, updated_at = ? WHERE id = ?",
+                         (body, datetime.now().isoformat(), note_id))
+        conn.commit()
+
+def note_delete(note_id):
+    with get_connection() as conn:
+        conn.execute("DELETE FROM note_items WHERE note_id = ?", (note_id,))
+        conn.execute("DELETE FROM notes WHERE id = ?", (note_id,))
+        conn.commit()
+
+def note_item_add(note_id, text):
+    with get_connection() as conn:
+        max_pos = conn.execute(
+            "SELECT COALESCE(MAX(position), -1) FROM note_items WHERE note_id = ?", (note_id,)
+        ).fetchone()[0]
+        cur = conn.execute(
+            "INSERT INTO note_items (note_id, position, text, checked, created_at) VALUES (?, ?, ?, 0, ?)",
+            (note_id, max_pos + 1, text, datetime.now().isoformat())
+        )
+        conn.execute("UPDATE notes SET updated_at = ? WHERE id = ?",
+                     (datetime.now().isoformat(), note_id))
+        conn.commit()
+        return cur.lastrowid
+
+def note_item_update(item_id, text=None, checked=None):
+    with get_connection() as conn:
+        if text is not None:
+            conn.execute("UPDATE note_items SET text = ? WHERE id = ?", (text, item_id))
+        if checked is not None:
+            conn.execute("UPDATE note_items SET checked = ? WHERE id = ?",
+                         (1 if checked else 0, item_id))
+        row = conn.execute("SELECT note_id FROM note_items WHERE id = ?", (item_id,)).fetchone()
+        if row:
+            conn.execute("UPDATE notes SET updated_at = ? WHERE id = ?",
+                         (datetime.now().isoformat(), row["note_id"]))
+        conn.commit()
+
+def note_item_delete(item_id):
+    with get_connection() as conn:
+        row = conn.execute("SELECT note_id FROM note_items WHERE id = ?", (item_id,)).fetchone()
+        conn.execute("DELETE FROM note_items WHERE id = ?", (item_id,))
+        if row:
+            conn.execute("UPDATE notes SET updated_at = ? WHERE id = ?",
+                         (datetime.now().isoformat(), row["note_id"]))
+        conn.commit()
 
 
 if __name__ == "__main__":

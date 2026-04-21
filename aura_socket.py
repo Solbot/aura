@@ -13,6 +13,8 @@
 #   {"type": "status_update", "key": "...", "value": "..."}
 #   {"type": "ui_command", "tool": "...", "args": {...}}
 #   {"type": "ui_query", "filter": {...}, "request_id": "..."}
+#   {"type": "tts_start"}   — mute STT wake detection while speaking
+#   {"type": "tts_end"}     — unmute STT wake detection
 #   {"type": "pong"}
 
 import socket
