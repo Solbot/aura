@@ -12,11 +12,17 @@ import awareness
 import memory
 import commands
 import aura_socket
+import knowledge
 from piper import PiperVoice, SynthesisConfig
 
 # --- Initialise database and tools ---
 db.init_db()
+knowledge.init_dirs()
 tools.load_all()
+
+# --- Load hardware plugins ---
+import hardware
+hardware.load_all()
 
 
 # --- Load voice ---
@@ -127,6 +133,12 @@ def build_system_prompt():
         "For list items within a note: add_list_item to append, update_list_item to edit text "
         "or check/uncheck an item, remove_list_item to delete one item.\n"
         + _web_search_rules()
+        + "- KNOWLEDGE BASE: When the user asks about information that might be in their "
+        "personal documents, reference materials, or anything they may have uploaded, "
+        "call knowledge_search. Call list_knowledge_docs to see what is available. "
+        "If results are returned, incorporate them naturally — cite the source document name.\n"
+        "- When the user pastes a URL in their message, automatically call fetch_page to "
+        "read and interpret the page content before responding.\n"
     )
 
 # --- Tiered endpoint selection ---
@@ -438,6 +450,18 @@ def _run_awareness_llm(prompt):
 
 aura_socket.send_system_message(f"{ASSISTANT_NAME} is online.", level="info")
 
+_last_knowledge_check = 0.0
+_KNOWLEDGE_INTERVAL   = 60.0  # seconds between auto-scans of upload dir
+
+
+def _run_knowledge_watch():
+    global _last_knowledge_check
+    _last_knowledge_check = time.time()
+    results = knowledge.watch_once()
+    for msg in results:
+        aura_socket.send_system_message(msg, level="info")
+
+
 while True:
     immediate = awareness.get_immediate_message()
     if immediate:
@@ -456,11 +480,19 @@ while True:
             speak(check_reply)
         continue
 
+    # Periodic knowledge upload scan
+    if time.time() - _last_knowledge_check >= _KNOWLEDGE_INTERVAL:
+        _run_knowledge_watch()
+
     socket_msg = aura_socket.get_incoming(block=True, timeout=0.2)
     if socket_msg is None:
         continue
 
     msg_type = socket_msg.get("type")
+
+    if msg_type == "process_knowledge":
+        _run_knowledge_watch()
+        continue
 
     if msg_type == "shutdown":
         aura_socket.send_system_message("Aura shutting down.", level="info")

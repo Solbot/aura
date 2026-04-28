@@ -32,7 +32,7 @@ except Exception:
 SOCKET_PATH = "/tmp/aura.sock"
 DB_PATH     = os.path.expanduser("~/aura/aura.db")
 
-CSS = b"""
+DARK_CSS = b"""
 window {
     background-color: #14141e;
 }
@@ -103,7 +103,281 @@ label {
 .stt-state   { color: #1ab380; font-size: 11px; font-style: italic; margin-left: 2px; }
 .stt-loading { color: #8888aa; font-size: 11px; font-style: italic; margin-left: 2px; }
 .mic-selector label { color: #000000; font-size: 13px; }
+dropdown label { color: #000000; }
+button label { color: #000000; }
+button.privacy-btn label { color: #6868a0; }
+button.privacy-btn:hover label { color: #f0f0f0; }
+button.privacy-btn:checked label { color: #e63333; }
+button.privacy-btn:checked:hover label { color: #ff5555; }
+button.header-btn label { color: #6868a0; }
+button.header-btn:hover label { color: #f0f0f0; }
+button.settings-close-btn label { color: #6868a0; }
+button.settings-close-btn:hover label { color: #f0f0f0; }
+.stt-icon.privacy  { color: #e63333; }
+.battery-ok       { color: #8888aa; font-size: 12px; }
+.battery-warning  { color: #e69910; font-size: 12px; }
+.battery-critical { color: #e63333; font-size: 12px; }
+button.privacy-btn {
+    background: none;
+    border: none;
+    color: #6868a0;
+    font-size: 16px;
+    padding: 2px 8px;
+    min-height: 0;
+    min-width: 0;
+    border-radius: 4px;
+}
+button.privacy-btn:hover   { color: #f0f0f0; background-color: #252538; }
+button.privacy-btn:checked { color: #e63333; }
+button.privacy-btn:checked:hover { color: #ff5555; background-color: #252538; }
+button.header-btn {
+    background: none;
+    border: none;
+    color: #6868a0;
+    font-size: 16px;
+    padding: 2px 8px;
+    min-height: 0;
+    min-width: 0;
+    border-radius: 4px;
+}
+button.header-btn:hover { color: #f0f0f0; background-color: #252538; }
+.settings-dialog { background-color: #14141e; }
+.settings-panel  { background-color: #14141e; }
+.settings-header {
+    background-color: #0f0f19;
+    padding: 12px 16px;
+    border-bottom: 1px solid #252538;
+}
+.settings-title { color: #f0f0f0; font-size: 15px; font-weight: bold; }
+.settings-close-btn {
+    background: none;
+    border: none;
+    color: #6868a0;
+    font-size: 15px;
+    padding: 2px 8px;
+    min-height: 0;
+    min-width: 0;
+}
+.settings-close-btn:hover { color: #f0f0f0; }
+.settings-section {
+    color: #1ab380;
+    font-size: 11px;
+    font-weight: bold;
+    letter-spacing: 1px;
+}
+.settings-row {
+    background-color: #1a1a2e;
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin-bottom: 2px;
+}
+.settings-row-label { color: #f0f0f0; font-size: 14px; }
+.settings-row-desc  { color: #6868a0; font-size: 12px; }
+.settings-footer {
+    background-color: #0f0f19;
+    padding: 10px 16px;
+    border-top: 1px solid #252538;
+}
+button.settings-btn-save {
+    background-color: #3380e8;
+    color: #ffffff;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 24px;
+    font-weight: bold;
+    font-size: 14px;
+}
+button.settings-btn-save:hover { background-color: #4490f8; }
+button.settings-btn-cancel {
+    background-color: #252538;
+    color: #c0c0d0;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 18px;
+    font-size: 14px;
+}
+button.settings-btn-cancel:hover { background-color: #2e2e4a; }
+entry.settings-entry {
+    background-color: #252538;
+    color: #f0f0f0;
+    border: 1px solid #3a3a58;
+    border-radius: 4px;
+    font-size: 13px;
+}
+entry.settings-entry:focus { border-color: #3380e8; }
 """
+
+LIGHT_CSS = b"""
+window {
+    background-color: #f5f5fa;
+}
+.header {
+    background-color: #eaeaf2;
+    padding: 8px 14px;
+    border-bottom: 1px solid #d0d0e0;
+}
+.chat-scroll {
+    background-color: #f5f5fa;
+}
+.chat-box {
+    background-color: #f5f5fa;
+}
+.input-bar {
+    background-color: #eaeaf2;
+    padding: 8px;
+    border-top: 1px solid #d0d0e0;
+}
+.input-frame {
+    border: 1px solid #b0b0cc;
+    border-radius: 6px;
+    background-color: #ffffff;
+}
+.input-frame:focus-within {
+    border-color: #3380e8;
+}
+textview {
+    background-color: #ffffff;
+    color: #1a1a2e;
+    font-size: 15px;
+    padding: 8px 12px;
+}
+textview text {
+    background-color: #ffffff;
+    color: #1a1a2e;
+}
+button.send-btn {
+    background-color: #3380e8;
+    color: #ffffff;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 22px;
+    font-weight: bold;
+    font-size: 14px;
+}
+button.send-btn:hover {
+    background-color: #4490f8;
+}
+label {
+    color: #1a1a2e;
+}
+.title-lbl {
+    color: #0a7a55;
+    font-size: 15px;
+}
+.connecting  { color: #c07000; }
+.connected   { color: #0a7a55; }
+.disconnected{ color: #cc2222; }
+.dim         { color: #6868a0; }
+.warn        { color: #c07000; }
+.err         { color: #cc2222; }
+.msg-user    { color: #2020aa; font-size: 14px; }
+.msg-aura    { color: #1a1a2e; font-size: 14px; }
+.status-msg  { color: #8888aa; font-size: 12px; font-style: italic; }
+.stt-icon    { color: #6868a0; font-size: 13px; }
+.stt-icon.listening { color: #0a7a55; }
+.stt-state   { color: #0a7a55; font-size: 11px; font-style: italic; margin-left: 2px; }
+.stt-loading { color: #6868a0; font-size: 11px; font-style: italic; margin-left: 2px; }
+.mic-selector label { color: #000000; font-size: 13px; }
+.stt-icon.privacy  { color: #cc2222; }
+.battery-ok       { color: #6868a0; font-size: 12px; }
+.battery-warning  { color: #c07000; font-size: 12px; }
+.battery-critical { color: #cc2222; font-size: 12px; }
+button.privacy-btn {
+    background: none;
+    border: none;
+    color: #6868a0;
+    font-size: 16px;
+    padding: 2px 8px;
+    min-height: 0;
+    min-width: 0;
+    border-radius: 4px;
+}
+button.privacy-btn:hover   { color: #1a1a2e; background-color: #d8d8ea; }
+button.privacy-btn:checked { color: #cc2222; }
+button.privacy-btn:checked:hover { color: #ff3333; background-color: #d8d8ea; }
+button.header-btn {
+    background: none;
+    border: none;
+    color: #6868a0;
+    font-size: 16px;
+    padding: 2px 8px;
+    min-height: 0;
+    min-width: 0;
+    border-radius: 4px;
+}
+button.header-btn:hover { color: #1a1a2e; background-color: #d8d8ea; }
+.settings-dialog { background-color: #f5f5fa; }
+.settings-panel  { background-color: #f5f5fa; }
+.settings-header {
+    background-color: #eaeaf2;
+    padding: 12px 16px;
+    border-bottom: 1px solid #d0d0e0;
+}
+.settings-title { color: #1a1a2e; font-size: 15px; font-weight: bold; }
+.settings-close-btn {
+    background: none;
+    border: none;
+    color: #6868a0;
+    font-size: 15px;
+    padding: 2px 8px;
+    min-height: 0;
+    min-width: 0;
+}
+.settings-close-btn:hover { color: #1a1a2e; }
+.settings-section {
+    color: #0a7a55;
+    font-size: 11px;
+    font-weight: bold;
+    letter-spacing: 1px;
+}
+.settings-row {
+    background-color: #ffffff;
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin-bottom: 2px;
+}
+.settings-row-label { color: #1a1a2e; font-size: 14px; }
+.settings-row-desc  { color: #6868a0; font-size: 12px; }
+.settings-footer {
+    background-color: #eaeaf2;
+    padding: 10px 16px;
+    border-top: 1px solid #d0d0e0;
+}
+button.settings-btn-save {
+    background-color: #3380e8;
+    color: #ffffff;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 24px;
+    font-weight: bold;
+    font-size: 14px;
+}
+button.settings-btn-save:hover { background-color: #4490f8; }
+button.settings-btn-cancel {
+    background-color: #d0d0e0;
+    color: #404060;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 18px;
+    font-size: 14px;
+}
+button.settings-btn-cancel:hover { background-color: #c0c0d0; }
+entry.settings-entry {
+    background-color: #ffffff;
+    color: #1a1a2e;
+    border: 1px solid #b0b0cc;
+    border-radius: 4px;
+    font-size: 13px;
+}
+entry.settings-entry:focus { border-color: #3380e8; }
+"""
+
+_css_provider = None
+
+
+def _apply_theme(mode):
+    css = LIGHT_CSS if mode == "light" else DARK_CSS
+    _css_provider.load_from_data(css)
 
 
 class SocketClient:
@@ -169,6 +443,245 @@ class SocketClient:
             time.sleep(2)
 
 
+class SettingsPage(Gtk.Box):
+    """In-window settings panel — overlaid on the chat area, never a separate window."""
+
+    def __init__(self, parent, on_close):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL)
+        self._parent   = parent
+        self._on_close = on_close
+        self._getters  = {}  # config key -> callable returning current str value
+
+        self.add_css_class("settings-panel")
+
+        self._build_header()
+        try:
+            self._build_body()
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            err = Gtk.Label(label=f"Settings failed to load:\n{exc}")
+            err.set_wrap(True)
+            err.set_vexpand(True)
+            err.add_css_class("err")
+            self.append(err)
+        self._build_footer()
+
+    # ── panel header ─────────────────────────────────────────────────────────
+
+    def _build_header(self):
+        hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        hdr.add_css_class("settings-header")
+
+        lbl = Gtk.Label(label="Settings")
+        lbl.add_css_class("settings-title")
+        lbl.set_hexpand(True)
+        lbl.set_xalign(0.0)
+        hdr.append(lbl)
+
+        close = Gtk.Button(label="✕")
+        close.add_css_class("settings-close-btn")
+        close.connect("clicked", lambda *_: self._on_close())
+        hdr.append(close)
+
+        self.append(hdr)
+
+    # ── scrollable body ──────────────────────────────────────────────────────
+
+    def _build_body(self):
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_vexpand(True)
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        box.set_margin_top(8)
+        box.set_margin_bottom(8)
+        box.set_margin_start(16)
+        box.set_margin_end(16)
+
+        g = self._parent._db_get  # shorthand for reading current DB values
+
+        # ── Identity ──────────────────────────────────────────────────────
+        self._section(box, "Identity")
+        self._text_row(box, "assistant_name",         "Assistant Name",        "The name AURA calls herself",                        g("assistant_name")          or "Aura")
+        self._drop_row(box, "assistant_gender",        "Assistant Gender",       "Affects pronouns in self-descriptions",               ["female", "male", "neutral"], g("assistant_gender")  or "female")
+        self._text_row(box, "user_name",               "Your Full Name",         "Used in formal contexts",                            g("user_name")               or "")
+        self._text_row(box, "user_informal_name",      "Your Nickname",          "How AURA addresses you casually",                    g("user_informal_name")      or "")
+        self._text_row(box, "location",                "Location",               "City or region for weather and context",              g("location")                or "")
+
+        # ── Personality ───────────────────────────────────────────────────
+        self._section(box, "Personality")
+        self._text_row(box, "tone_preference",         "Conversation Tone",      "e.g. warm and direct, professional, casual",         g("tone_preference")         or "warm and direct")
+        self._text_row(box, "personality_traits",      "Personality Traits",     "Comma-separated traits",                             g("personality_traits")      or "")
+        self._text_row(box, "use_case",                "Primary Use Case",       "e.g. general assistance, coding, research",          g("use_case")                or "general assistance")
+        self._drop_row(box, "failure_mode",            "On Frustration",         "How AURA responds when things go wrong",             ["gentle", "firm", "playful", "direct"], g("failure_mode") or "gentle")
+
+        # ── Voice & Audio ─────────────────────────────────────────────────
+        self._section(box, "Voice & Audio")
+        self._switch_row(box, "audio_enabled",         "Audio Output",           "Enable text-to-speech voice output",                 g("audio_enabled"))
+        self._text_row(box,   "voice_model",           "Voice Model",            "Piper TTS model name (e.g. en_US-amy-medium)",       g("voice_model")             or "en_US-amy-medium")
+        self._scale_row(box,  "voice_speed",           "Voice Speed",            "TTS playback speed multiplier",                      g("voice_speed")             or "1.0", 0.5, 2.0, 0.1)
+
+        # ── Speech Input ──────────────────────────────────────────────────
+        self._section(box, "Speech Input")
+        self._switch_row(box, "stt_enabled",           "Voice Input",            "Enable always-on wake-word detection",               g("stt_enabled"))
+        self._drop_row(box,   "stt_model",             "Whisper Model",          "Larger = more accurate, slower to load",             ["tiny", "base", "small"],   g("stt_model")         or "tiny")
+
+        # ── Web & Search ──────────────────────────────────────────────────
+        self._section(box, "Web & Search")
+        self._switch_row(box, "auto_search",           "Auto Web Search",        "Automatically search the web when relevant",         g("auto_search"))
+
+        # ── LLM Endpoints ─────────────────────────────────────────────────
+        self._section(box, "LLM Endpoints")
+        self._text_row(box, "home_pc_endpoint",        "Home PC Endpoint",       "Local llama.cpp server URL",                         g("home_pc_endpoint")        or "")
+        self._text_row(box, "remote_api_endpoint",     "Remote API Endpoint",    "Fallback cloud API (OpenAI-compatible URL)",          g("remote_api_endpoint")     or "")
+
+        # ── Background & Memory ───────────────────────────────────────────
+        self._section(box, "Background & Memory")
+        self._spin_row(box, "dream_delay",             "Dream Delay",            "Minutes of silence before memory consolidation",     g("dream_delay")             or "10",  1, 120)
+        self._spin_row(box, "awareness_interval",      "Awareness Interval",     "Background check interval in minutes",               g("awareness_interval")      or "5",   1,  60)
+        self._text_row(box, "quiet_hours_start",       "Quiet Hours Start",      "Suppress non-urgent alerts after this time (HH:MM)", g("quiet_hours_start")       or "22:00")
+        self._text_row(box, "quiet_hours_end",         "Quiet Hours End",        "Resume normal alerts after this time (HH:MM)",       g("quiet_hours_end")         or "07:00")
+
+        # ── Display ───────────────────────────────────────────────────────
+        self._section(box, "Display")
+        self._drop_row(box, "theme",                   "Theme",                  "UI colour scheme",                                   ["dark", "light"],           g("theme")             or "dark")
+        self._drop_row(box, "clock_format",            "Clock Format",           "12-hour (1:30 PM) or 24-hour (13:30) time display",  ["24", "12"],                g("clock_format")      or "24")
+
+        # ── Hardware ──────────────────────────────────────────────────────
+        self._section(box, "Hardware")
+        self._spin_row(box, "critical_temp_threshold",   "Critical Temperature",   "CPU temperature warning threshold (°C)",          g("critical_temp_threshold")   or "80",  50, 100)
+        self._spin_row(box, "battery_warning_threshold", "Battery Warning Level",  "Warn when battery drops below this % (0=off)",   g("battery_warning_threshold") or "20",   0,  50)
+        self._spin_row(box, "battery_critical_threshold","Battery Critical Level", "Critical alert when battery drops below this %", g("battery_critical_threshold") or "10",  0,  30)
+        self._text_row(box, "pisugar3_socket",           "PiSugar 3 Socket Path",  "Leave blank for default (/tmp/pisugar-server.sock)", g("pisugar3_socket")         or "")
+
+        # ── Debug ─────────────────────────────────────────────────────────
+        self._section(box, "Debug")
+        self._switch_row(box, "debug_tools",           "Debug Tool Calls",       "Print tool arguments and results to console",        g("debug_tools"))
+
+        scroll.set_child(box)
+        self.append(scroll)
+
+    # ── panel footer ─────────────────────────────────────────────────────────
+
+    def _build_footer(self):
+        footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        footer.add_css_class("settings-footer")
+
+        spacer = Gtk.Box()
+        spacer.set_hexpand(True)
+        footer.append(spacer)
+
+        cancel = Gtk.Button(label="Cancel")
+        cancel.add_css_class("settings-btn-cancel")
+        cancel.connect("clicked", lambda *_: self._on_close())
+        footer.append(cancel)
+
+        save = Gtk.Button(label="Save Changes")
+        save.add_css_class("settings-btn-save")
+        save.connect("clicked", self._save)
+        footer.append(save)
+
+        self.append(footer)
+
+    # ── row builders ─────────────────────────────────────────────────────────
+
+    def _section(self, parent, title):
+        lbl = Gtk.Label(label=title.upper())
+        lbl.add_css_class("settings-section")
+        lbl.set_xalign(0.0)
+        lbl.set_margin_top(16)
+        lbl.set_margin_bottom(4)
+        parent.append(lbl)
+
+    def _make_row(self, parent, label, desc, widget):
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add_css_class("settings-row")
+
+        text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        text.set_hexpand(True)
+
+        lbl = Gtk.Label(label=label)
+        lbl.add_css_class("settings-row-label")
+        lbl.set_xalign(0.0)
+        text.append(lbl)
+
+        if desc:
+            dl = Gtk.Label(label=desc)
+            dl.add_css_class("settings-row-desc")
+            dl.set_xalign(0.0)
+            dl.set_wrap(True)
+            dl.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+            text.append(dl)
+
+        row.append(text)
+        widget.set_valign(Gtk.Align.CENTER)
+        row.append(widget)
+        parent.append(row)
+
+    def _text_row(self, parent, key, label, desc, value):
+        entry = Gtk.Entry()
+        entry.set_text(value)
+        entry.add_css_class("settings-entry")
+        entry.set_width_chars(22)
+        self._make_row(parent, label, desc, entry)
+        self._getters[key] = entry.get_text
+
+    def _drop_row(self, parent, key, label, desc, options, current):
+        dd = Gtk.DropDown.new_from_strings(options)
+        if current in options:
+            dd.set_selected(options.index(current))
+        self._make_row(parent, label, desc, dd)
+        def _get(d=dd, opts=options):
+            idx = d.get_selected()
+            return opts[idx] if idx != Gtk.INVALID_LIST_POSITION else opts[0]
+        self._getters[key] = _get
+
+    def _switch_row(self, parent, key, label, desc, value):
+        sw = Gtk.Switch()
+        sw.set_active((value or "0") == "1")
+        self._make_row(parent, label, desc, sw)
+        self._getters[key] = lambda s=sw: "1" if s.get_active() else "0"
+
+    def _spin_row(self, parent, key, label, desc, value, lo, hi):
+        try:
+            cur = float(value)
+        except (TypeError, ValueError):
+            cur = float(lo)
+        spin = Gtk.SpinButton.new_with_range(lo, hi, 1)
+        spin.set_value(cur)
+        spin.set_width_chars(5)
+        self._make_row(parent, label, desc, spin)
+        self._getters[key] = lambda s=spin: str(int(s.get_value()))
+
+    def _scale_row(self, parent, key, label, desc, value, lo, hi, step):
+        try:
+            cur = float(value)
+        except (TypeError, ValueError):
+            cur = float(lo)
+        scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, lo, hi, step)
+        scale.set_value(cur)
+        scale.set_size_request(150, -1)
+        scale.set_draw_value(True)
+        scale.set_digits(1)
+        self._make_row(parent, label, desc, scale)
+        self._getters[key] = lambda s=scale: f"{s.get_value():.1f}"
+
+    # ── save ─────────────────────────────────────────────────────────────────
+
+    def _save(self, *_):
+        changed = {}
+        for key, getter in self._getters.items():
+            new_val = getter()
+            old_val = self._parent._db_get(key) or ""
+            if new_val != old_val:
+                self._parent._db_set(key, new_val)
+                changed[key] = new_val
+        if changed:
+            self._parent._on_settings_saved(changed)
+        self._on_close()
+
+
 class AuraWindow(Gtk.ApplicationWindow):
     def __init__(self, **kwargs):
         super().__init__(title="AURA", **kwargs)
@@ -177,6 +690,10 @@ class AuraWindow(Gtk.ApplicationWindow):
 
         self._assistant_name = self._db_get("assistant_name")      or "Aura"
         self._user_name      = self._db_get("user_informal_name")  or "You"
+        self._clock_format   = self._db_get("clock_format")        or "24"
+
+        # CPU % tracking (delta between two /proc/stat readings)
+        self._cpu_prev        = None
 
         # STT state
         self._listener        = None
@@ -186,13 +703,24 @@ class AuraWindow(Gtk.ApplicationWindow):
         self._stt_icon_lbl    = None   # 🎤 label — CSS class changes with state
         self._stt_state_lbl   = None   # "loading…" / "● listening" — hidden when idle
         self._mic_populating  = False  # suppress notify::selected during programmatic set
+        self._privacy_btn     = None
+        self._privacy_mode    = (self._db_get("privacy_mode") or "0") == "1"
 
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.set_child(root)
 
         self._build_header(root)
-        self._build_chat(root)
-        self._build_input(root)
+
+        # Overlay lets the settings panel cover chat+input without a new window.
+        self._settings_overlay = Gtk.Overlay()
+        self._settings_overlay.set_vexpand(True)
+        self._settings_overlay.set_hexpand(True)
+        self._active_settings  = None
+        chat_base = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self._build_chat(chat_base)
+        self._build_input(chat_base)
+        self._settings_overlay.set_child(chat_base)
+        root.append(self._settings_overlay)
 
         self._sock = SocketClient(self._on_socket_msg)
         self._sock.start()
@@ -244,10 +772,10 @@ class AuraWindow(Gtk.ApplicationWindow):
         bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
         bar.add_css_class("header")
 
-        title = Gtk.Label()
-        title.set_markup(f'<b>{GLib.markup_escape_text(self._assistant_name.upper())}</b>')
-        title.add_css_class("title-lbl")
-        bar.append(title)
+        self._title_lbl = Gtk.Label()
+        self._title_lbl.set_markup(f'<b>{GLib.markup_escape_text(self._assistant_name.upper())}</b>')
+        self._title_lbl.add_css_class("title-lbl")
+        bar.append(self._title_lbl)
 
         spacer = Gtk.Box()
         spacer.set_hexpand(True)
@@ -307,6 +835,39 @@ class AuraWindow(Gtk.ApplicationWindow):
         self._mem_lbl.set_margin_start(6)
         bar.append(self._mem_lbl)
 
+        self._batt_lbl = Gtk.Label(label="🔋 --%")
+        self._batt_lbl.add_css_class("battery-ok")
+        self._batt_lbl.set_margin_start(6)
+        self._batt_lbl.set_visible(False)  # Hidden until pisugar-server reports
+        bar.append(self._batt_lbl)
+
+        self._cpu_lbl = Gtk.Label(label="--%")
+        self._cpu_lbl.add_css_class("dim")
+        self._cpu_lbl.set_margin_start(6)
+        bar.append(self._cpu_lbl)
+
+        self._privacy_btn = Gtk.ToggleButton(label="🔒")
+        self._privacy_btn.add_css_class("privacy-btn")
+        self._privacy_btn.set_tooltip_text("Privacy mode — stops listening")
+        self._privacy_btn.set_active(self._privacy_mode)
+        self._privacy_btn.connect("toggled", self._on_privacy_toggled)
+        self._privacy_btn.set_margin_start(4)
+        bar.append(self._privacy_btn)
+
+        knowledge_btn = Gtk.Button(label="📚")
+        knowledge_btn.add_css_class("header-btn")
+        knowledge_btn.set_tooltip_text("Import document to knowledge base")
+        knowledge_btn.connect("clicked", self._open_knowledge_dialog)
+        knowledge_btn.set_margin_start(4)
+        bar.append(knowledge_btn)
+
+        settings_btn = Gtk.Button(label="⚙")
+        settings_btn.add_css_class("header-btn")
+        settings_btn.set_tooltip_text("Settings")
+        settings_btn.connect("clicked", self._open_settings)
+        settings_btn.set_margin_start(4)
+        bar.append(settings_btn)
+
         parent.append(bar)
 
     def _build_chat(self, parent):
@@ -332,10 +893,9 @@ class AuraWindow(Gtk.ApplicationWindow):
         parent.append(self._scroll)
         self._vadj = self._scroll.get_vadjustment()
 
-        self._vadj.connect(
-            "changed",
-            lambda adj: adj.set_value(adj.get_upper() - adj.get_page_size()),
-        )
+        # Do NOT connect to "changed" here — it fires before layout is finalized
+        # and lands the scroll one message short. Scrolling is triggered explicitly
+        # after each append via GLib.idle_add (see _scroll_to_bottom).
 
     def _build_input(self, parent):
         bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -426,7 +986,12 @@ class AuraWindow(Gtk.ApplicationWindow):
                     break
             self._mic_populating = False
 
-            self._start_background_listener(saved)
+            if not self._privacy_mode:
+                self._start_background_listener(saved)
+            else:
+                self._set_stt_state("idle")
+                if self._stt_icon_lbl:
+                    self._stt_icon_lbl.add_css_class("privacy")
 
         except Exception as e:
             print(f"[stt] populate_mic_selector: {e}")
@@ -522,7 +1087,25 @@ class AuraWindow(Gtk.ApplicationWindow):
             return
         _, full_name = self._mic_options[idx]
         self._db_set("stt_microphone", full_name)
-        self._start_background_listener(full_name)
+        if not self._privacy_mode:
+            self._start_background_listener(full_name)
+
+    def _on_privacy_toggled(self, btn):
+        """Enable/disable privacy mode: stop or restart the background listener."""
+        self._privacy_mode = btn.get_active()
+        self._db_set("privacy_mode", "1" if self._privacy_mode else "0")
+        if not _STT_AVAILABLE or not self._stt_icon_lbl:
+            return
+        if self._privacy_mode:
+            if self._listener:
+                self._listener.stop()
+                self._listener = None
+            self._set_stt_state("idle")
+            self._stt_icon_lbl.add_css_class("privacy")
+        else:
+            self._stt_icon_lbl.remove_css_class("privacy")
+            mic = self._db_get("stt_microphone") or ""
+            self._start_background_listener(mic)
 
     # --------------------------------------------------------------- Chat --
 
@@ -539,6 +1122,7 @@ class AuraWindow(Gtk.ApplicationWindow):
         lbl.set_selectable(True)
         lbl.add_css_class("msg-user" if role == "user" else "msg-aura")
         self._chat.append(lbl)
+        GLib.idle_add(self._scroll_to_bottom)
 
     def _add_status(self, text, css="status-msg"):
         lbl = Gtk.Label()
@@ -549,6 +1133,11 @@ class AuraWindow(Gtk.ApplicationWindow):
         lbl.set_hexpand(True)
         lbl.add_css_class(css)
         self._chat.append(lbl)
+        GLib.idle_add(self._scroll_to_bottom)
+
+    def _scroll_to_bottom(self):
+        self._vadj.set_value(self._vadj.get_upper() - self._vadj.get_page_size())
+        return GLib.SOURCE_REMOVE
 
     # -------------------------------------------------------------- Input --
 
@@ -605,12 +1194,15 @@ class AuraWindow(Gtk.ApplicationWindow):
                 self._set_temp(val)
             elif key == "memory":
                 self._mem_lbl.set_text(f"{val} MB")
+            elif key == "battery":
+                self._update_battery(val)
         return GLib.SOURCE_REMOVE
 
     # -------------------------------------------------------- System info --
 
     def _tick_clock(self):
-        self._clock_lbl.set_text(datetime.now().strftime("%H:%M"))
+        fmt = "%I:%M %p" if self._clock_format == "12" else "%H:%M"
+        self._clock_lbl.set_text(datetime.now().strftime(fmt))
         return GLib.SOURCE_CONTINUE
 
     def _tick_sysinfo(self):
@@ -626,7 +1218,51 @@ class AuraWindow(Gtk.ApplicationWindow):
                 self._mem_lbl.set_text(f"{used_mb} MB")
         except Exception:
             pass
+        try:
+            cpu = self._read_cpu_percent()
+            if cpu is not None:
+                self._cpu_lbl.set_text(f"{cpu:.0f}%")
+        except Exception:
+            pass
         return GLib.SOURCE_CONTINUE
+
+    def _update_battery(self, val):
+        """Update the battery header label from a status_update battery value (e.g. '🔋 85%')."""
+        self._batt_lbl.set_text(val)
+        self._batt_lbl.set_visible(True)
+        for cls in ("battery-ok", "battery-warning", "battery-critical"):
+            self._batt_lbl.remove_css_class(cls)
+        try:
+            # Extract numeric level from strings like "⚡ 85%" or "🔋 12%"
+            digits = "".join(c for c in val if c.isdigit())
+            level  = int(digits) if digits else 100
+            warn   = int(self._db_get("battery_warning_threshold")  or "20")
+            crit   = int(self._db_get("battery_critical_threshold") or "10")
+            if level <= crit:
+                self._batt_lbl.add_css_class("battery-critical")
+            elif level <= warn:
+                self._batt_lbl.add_css_class("battery-warning")
+            else:
+                self._batt_lbl.add_css_class("battery-ok")
+        except (ValueError, TypeError):
+            self._batt_lbl.add_css_class("battery-ok")
+
+    def _read_cpu_percent(self):
+        """Compute CPU usage % as delta between two /proc/stat readings (5 s window)."""
+        with open('/proc/stat') as f:
+            line = f.readline()
+        parts = list(map(int, line.split()[1:8]))  # user nice system idle iowait irq softirq
+        idle  = parts[3]
+        total = sum(parts)
+        if self._cpu_prev is None:
+            self._cpu_prev = (idle, total)
+            return None
+        d_idle  = idle  - self._cpu_prev[0]
+        d_total = total - self._cpu_prev[1]
+        self._cpu_prev = (idle, total)
+        if d_total <= 0:
+            return 0.0
+        return 100.0 * (1.0 - d_idle / d_total)
 
     def _read_mem_mb(self):
         with open('/proc/meminfo') as f:
@@ -656,6 +1292,63 @@ class AuraWindow(Gtk.ApplicationWindow):
         except Exception:
             pass
 
+    def _open_knowledge_dialog(self, *_):
+        """Open a native file chooser to import documents into the knowledge base."""
+        self._knowledge_native = Gtk.FileChooserNative.new(
+            "Import to Knowledge Base",
+            self,
+            Gtk.FileChooserAction.OPEN,
+            "_Import",
+            "_Cancel",
+        )
+        self._knowledge_native.set_select_multiple(True)
+
+        filter_docs = Gtk.FileFilter()
+        filter_docs.set_name("Documents (PDF, DOCX, TXT, MD, CSV)")
+        for pat in ["*.pdf", "*.PDF", "*.docx", "*.DOCX",
+                    "*.txt", "*.TXT", "*.md", "*.MD", "*.rst", "*.csv"]:
+            filter_docs.add_pattern(pat)
+        self._knowledge_native.add_filter(filter_docs)
+
+        filter_all = Gtk.FileFilter()
+        filter_all.set_name("All files")
+        filter_all.add_pattern("*")
+        self._knowledge_native.add_filter(filter_all)
+
+        self._knowledge_native.connect("response", self._on_knowledge_file_response)
+        self._knowledge_native.show()
+
+    def _on_knowledge_file_response(self, dialog, response):
+        self._knowledge_native = None
+        if response != Gtk.ResponseType.ACCEPT:
+            return
+        import shutil
+        upload_dir = os.path.expanduser("~/knowledge/upload")
+        os.makedirs(upload_dir, exist_ok=True)
+        files = dialog.get_files()
+        n = files.get_n_items()
+        imported = []
+        for i in range(n):
+            f = files.get_item(i)
+            path = f.get_path()
+            if not path:
+                continue
+            fname = os.path.basename(path)
+            dest  = os.path.join(upload_dir, fname)
+            try:
+                shutil.copy2(path, dest)
+                imported.append(fname)
+            except Exception as e:
+                self._add_status(f"Failed to copy {fname}: {e}", "err")
+        if imported:
+            preview = ", ".join(imported[:3]) + ("…" if len(imported) > 3 else "")
+            self._add_status(
+                f"Queued {len(imported)} file(s) for knowledge base import: {preview}",
+                "status-msg",
+            )
+            if self._sock.connected:
+                self._sock.send({"type": "process_knowledge"})
+
     def _toggle_fullscreen(self):
         if self._is_fullscreen:
             self.unfullscreen()
@@ -663,6 +1356,51 @@ class AuraWindow(Gtk.ApplicationWindow):
         else:
             self.fullscreen()
             self._is_fullscreen = True
+
+    def _open_settings(self, *_):
+        if self._active_settings:
+            return  # already open
+        try:
+            page = SettingsPage(self, self._close_settings)
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            self._add_status(f"Settings error: {exc}", "err")
+            return
+        page.set_hexpand(True)
+        page.set_vexpand(True)
+        page.set_halign(Gtk.Align.FILL)
+        page.set_valign(Gtk.Align.FILL)
+        self._settings_overlay.add_overlay(page)
+        self._active_settings = page
+
+    def _close_settings(self):
+        if self._active_settings:
+            self._active_settings.unparent()
+            self._active_settings = None
+
+    def _on_settings_saved(self, changed):
+        if "theme" in changed:
+            _apply_theme(changed["theme"])
+        if "clock_format" in changed:
+            self._clock_format = changed["clock_format"]
+            self._tick_clock()
+        if "assistant_name" in changed:
+            self._assistant_name = changed["assistant_name"]
+            markup = f'<b>{GLib.markup_escape_text(self._assistant_name.upper())}</b>'
+            self._title_lbl.set_markup(markup)
+        if "user_informal_name" in changed:
+            self._user_name = changed["user_informal_name"] or "You"
+        stt_restart = {"stt_enabled", "stt_model"}
+        if _STT_AVAILABLE and stt_restart.intersection(changed):
+            if changed.get("stt_enabled") == "0":
+                if self._listener:
+                    self._listener.stop()
+                    self._listener = None
+                self._hide_mic_ui()
+            else:
+                mic = self._db_get("stt_microphone") or ""
+                GLib.idle_add(self._start_background_listener, mic)
 
     def do_close_request(self):
         if self._listener:
@@ -677,11 +1415,17 @@ class AuraApp(Gtk.Application):
         self.connect("activate", self._on_activate)
 
     def _on_activate(self, _):
-        provider = Gtk.CssProvider()
-        provider.load_from_data(CSS)
+        global _css_provider
+        _css_provider = Gtk.CssProvider()
+        try:
+            with sqlite3.connect(DB_PATH) as _conn:
+                _row = _conn.execute("SELECT value FROM config WHERE key='theme'").fetchone()
+            _apply_theme(_row[0] if _row else "dark")
+        except Exception:
+            _apply_theme("dark")
         Gtk.StyleContext.add_provider_for_display(
             Gdk.Display.get_default(),
-            provider,
+            _css_provider,
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
         )
         win = AuraWindow(application=self)

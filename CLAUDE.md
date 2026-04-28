@@ -11,9 +11,10 @@ systemd
 
 aura.py          (core — LLM loop, tool execution, memory management)
 │   ├── aura_socket  (Unix socket IPC to UI)
-│   ├── awareness    (background thread — reminders, temperature, dream)
+│   ├── awareness    (background thread — reminders, temperature, battery, dream)
 │   ├── memory       (hot/warm/cold three-tier memory)
 │   ├── tools/       (function-calling tool registry)
+│   ├── hardware/    (hardware device registry + drivers)
 │   └── db           (SQLite — all persistence)
 aura_gtk.py      (GTK4 UI — connects to aura via /tmp/aura.sock)
 │   └── stt.py       (BackgroundListener — always-on wake-word STT)
@@ -125,6 +126,38 @@ The 50% sliding window prevents wake words from being missed when they straddle 
 **GTK integration** — all `BackgroundListener` callbacks are invoked from the background thread; callers wrap them in `GLib.idle_add`. The `_mic_populating` flag suppresses spurious `notify::selected` signals during programmatic dropdown setup.
 
 **UI indicator** — header bar shows `🎤 [device dropdown]`; state label shows `loading…` during model load and `● listening` (green) while in active phase.
+
+## Hardware Plugin System
+
+Hardware devices live in `hardware/`. Each module self-registers at import time via `hardware.register(device_id, device)`. `aura.py` calls `hardware.load_all()` at startup after `tools.load_all()`.
+
+**Device interface** — every registered device must expose:
+- `device_id: str`
+- `name: str`
+- `is_available() -> bool`
+- `get_state() -> dict`
+
+**PiSugar 3 Plus** (`hardware/pisugar3.py`):
+- Communicates with `pisugar-server` daemon via Unix socket at `/tmp/pisugar-server.sock` (override with `pisugar3_socket` DB config)
+- State keys: `available`, `battery_level` (int %), `is_charging`, `is_power_plugged`, `battery_voltage`
+- Registers `battery_status` tool (FREE tier) so AURA can answer battery questions
+- 30-second cache on state reads
+
+**Awareness integration** — `awareness._check_battery()` runs every full check cycle:
+- Sends `status_update battery "⚡ 85%"` to push live level to UI header bar
+- Queues LLM warning via `llm_check_queue` at `battery_warning_threshold` % (default 20%)
+- Fires critical `immediate_queue` alert at `battery_critical_threshold` % (default 10%)
+- Warning flags reset when charging resumes or level recovers 5% above warning threshold
+
+**Battery tile** (`tiles/pisugar3_tile.py`):
+- Category `hardware`; available when pisugar3 daemon responds
+- `DataSource.get_state()` returns `battery_level`, `is_charging`, `status`, `icon`, `display`
+- `aura_context` template injects current level into AURA's system prompt
+
+**Adding a new hardware device:**
+1. Create `hardware/<device>.py` — implement `is_available()`, `get_state()`, register tool(s), call `hardware.register()`
+2. Add `from hardware import <device>` in `hardware/load_all()`
+3. Optionally add a tile in `tiles/<device>_tile.py`
 
 ## Database
 

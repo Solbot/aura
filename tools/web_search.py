@@ -195,8 +195,8 @@ def fetch_page(url):
     title   = _extract_title(resp.text)
     content = _extract_text(resp.text)
 
-    if len(content) > 4000:
-        content = content[:4000] + "\n\n[content truncated — ask for more if needed]"
+    if len(content) > 8000:
+        content = content[:8000] + "\n\n[content truncated — ask for more if needed]"
 
     db.web_cache_store(url, title, content)
 

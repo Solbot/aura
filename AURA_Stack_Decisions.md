@@ -12,8 +12,8 @@
 | NVMe HAT | Freenove M.2 NVMe Adapter V2 | PCIe 2.0/3.0, supports 2230/2242/2260/2280 |
 | Display | 10" touchscreen 1024x600 | Status display, notes, apps |
 | Audio Out | Built into touchscreen | |
-| Audio In | TBD — ReSpeaker array recommended | Backburnered until base system working |
-| Power | SugarPi 3 | Portable power |
+| Audio In | QuickCam Pro 9000 (USB) | Card 2 on this machine; ALSA routed via `/etc/asound.conf` |
+| Power | PiSugar 3 Plus | Portable power; managed via pisugar-server daemon |
 | Case | Custom design - 3D printed | Later |
 
 ---
@@ -25,10 +25,10 @@
 | OS | Raspberry Pi OS Lite 64-bit | Minimal, no desktop, boots from NVMe |
 | Inference Engine | llama.cpp | Better than Ollama on constrained hardware |
 | LLM Model | Llama 3.1 8B Q4_K_M | Best tool use at Pi-friendly size |
-| STT | Whisper | Model size TBD — backburnered with audio |
+| STT | faster-whisper tiny | Always-on wake-word listener; wake phrase "Hey AURA" |
 | TTS | Piper TTS | en_US-amy-medium, female default |
 | Language | Python | Primary development language |
-| UI Framework | Kivy | Selected — in development |
+| UI Framework | GTK4 | Replaced Kivy; tile-based touch interface |
 
 ---
 
@@ -77,10 +77,10 @@ Nothing is ever deleted without explicit user instruction (cold archive is perma
 ## UI Design
 
 - Tile-based touch interface inspired by Windows Phone/Win8 concept
-- Live glanceable tiles: connection status, AURA state, notes, reminders, battery
-- Touch to expand tiles for detail
-- Ambient animation when AURA is listening/thinking/speaking
-- Kivy (Python) — selected, in development
+- Header bar: assistant name · mic selector · connection status · clock · CPU temp · RAM · battery
+- Chat scroll area: message bubbles pushed to bottom, auto-scrolls on new content
+- Input bar: wrapping Gtk.TextView with Shift+Enter for newline, Enter to send
+- GTK4 (Python, gi) — implemented; runs under system python3 with venv PYTHONPATH for STT deps
 - Fullscreen, no traditional desktop chrome
 
 ---
@@ -139,9 +139,9 @@ Each tool is a self-contained Python module that registers with a standard inter
 - LLM decides when and which tool to call
 - Results feed back into conversation naturally
 
-**Implemented tools:** get_system_info (Pi sensors: temp, fan, disk, RAM, network, datetime), store_user_fact, get_user_facts
+**Implemented tools:** get_system_info (Pi sensors: temp, fan, disk, RAM, network, datetime), store_user_fact, get_user_facts, battery_status, web_search, fetch_page, knowledge_search, list_knowledge_docs, notes (create/list/delete), reminders (set/list/cancel), scheduled_tasks (create/list/delete/run)
 
-**Planned tools:** Notes, Reminders, Mud map sketch, Weather (connected), Web search (connected), Timer
+**Planned tools:** Mud map sketch, Weather (connected), Timer
 
 ---
 
@@ -184,17 +184,29 @@ All commands start with `/` and are intercepted before reaching the LLM (instant
 | File | Purpose |
 |---|---|
 | `aura.py` | Main loop, TTS, tool calls, CSAM check |
-| `db.py` | SQLite — config, user_profile, reminders, warm/cold memory |
+| `aura_gtk.py` | GTK4 UI — tile layout, chat area, header bar, STT integration |
+| `db.py` | SQLite — config, user_profile, reminders, tasks, notes, warm/cold memory, knowledge, web cache |
 | `memory.py` | Three-tier hot/warm/cold memory manager |
 | `dream.py` | Sleep/dream memory consolidation cycle |
-| `awareness.py` | Background thread: reminders, thermal, dream trigger, busy lock |
+| `awareness.py` | Background thread: reminders, thermal, battery, dream trigger, busy lock |
 | `commands.py` | Debug/utility slash commands |
 | `csam.py` | Hardcoded CSAM safety — never configurable |
 | `first_boot.py` | First-date conversation, populates config and user_profile (source='first_boot') |
-| `tools/__init__.py` | Tool registry with FREE/CONFIRM/LOCKED tiers — CONFIRM prompt uses assistant name from config |
+| `knowledge.py` | RAG engine: watches ~/knowledge/upload, chunks + indexes via SQLite FTS5 |
+| `stt.py` | BackgroundListener — always-on wake-word STT (faster-whisper) |
+| `hardware/__init__.py` | Hardware device registry |
+| `hardware/pisugar3.py` | PiSugar 3 Plus driver; registers battery_status tool |
+| `tiles/__init__.py` | Tile registry |
+| `tiles/pisugar3_tile.py` | Battery tile (category: hardware) |
+| `tools/__init__.py` | Tool registry with FREE/CONFIRM/LOCKED tiers |
 | `tools/system_info.py` | Pi sensor tool (date/time, temp, fan, disk, RAM, network) |
 | `tools/user_profile.py` | store_user_fact / get_user_facts tools |
-| `systemd/llama-server.service` | Systemd service file |
+| `tools/web_search.py` | web_search / fetch_page tools |
+| `tools/knowledge.py` | knowledge_search / list_knowledge_docs tools |
+| `tools/notes.py` | Notes create/list/delete tools |
+| `tools/reminders.py` | Reminder set/list/cancel tools |
+| `tools/tasks.py` | Scheduled task create/list/delete/run tools |
+| `systemd/` | Systemd service files (aura.service, aura-ui.service, llama-server.service) |
 
 ---
 
@@ -220,12 +232,21 @@ All commands start with `/` and are intercepted before reaching the LLM (instant
 - [x] Dream scheduling via interaction flag (fires after 10 min silence)
 - [x] Busy lock — dream waits for LLM to finish + 10s cooldown
 - [x] Debug command system (/help, /memory, /warm, /cold, /hot, /prompt, /status, /dream, /clear, /set, /config)
-- [ ] Tile UI (Kivy) — in development
-- [ ] Tiered connectivity (Home PC → Remote API → Local fallback)
-- [ ] STT/wake word (backburnered)
+- [x] GTK4 tile UI — header bar, chat area, tile grid, touch input
+- [x] Tiered connectivity (Home PC → Remote API → Local fallback)
+- [x] STT/wake word — faster-whisper tiny, always-on BackgroundListener
+- [x] TTS muting during AURA speech (prevents self-wake)
+- [x] Hardware plugin system (pisugar3 driver + battery tool)
+- [x] Battery awareness — live UI header, LLM warnings, critical alerts
+- [x] Battery tile (pisugar3_tile.py)
+- [x] Web search tool (web_search + fetch_page)
+- [x] Notes tool (create/list/delete)
+- [x] Reminders tool (set/list/cancel)
+- [x] Scheduled tasks tool (create/list/delete/run)
+- [x] Knowledge base / RAG (FTS5 index, upload folder watch, knowledge_search tool)
 - [ ] CSAM privileged logging service (systemd socket)
-- [ ] Notes/Reminders tool
-- [ ] Web search tool (connected mode)
+- [ ] Mud map sketch tool
+- [ ] Weather tool (connected mode)
 
 ---
 

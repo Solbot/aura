@@ -32,6 +32,10 @@ _aether_busy   = False  # Set True while the LLM is active
 _last_busy_end = 0.0    # Timestamp when last LLM call completed
 DREAM_COOLDOWN = 10     # Seconds to wait after LLM finishes before dreaming
 
+# Battery warning state — reset when battery recovers or charging starts
+_batt_warned_low      = False
+_batt_warned_critical = False
+
 # Callback wired by aura.py to rebuild SYSTEM_PROMPT after the dream cycle
 # updates the user profile.
 _on_dream_complete = None
@@ -162,6 +166,66 @@ def _check_date_events():
         pass
 
 
+def _check_battery():
+    """Poll PiSugar 3 state; push status to UI and queue low-battery alerts."""
+    global _batt_warned_low, _batt_warned_critical
+    try:
+        import hardware
+        device = hardware.get("pisugar3")
+        if device is None or not device.is_available():
+            return
+
+        state    = device.get_state()
+        level    = state.get("battery_level")
+        charging = state.get("is_charging", False)
+        plugged  = state.get("is_power_plugged", False)
+
+        if level is None:
+            return
+
+        # Push current level to the UI header bar
+        icon  = "⚡" if charging else "🔋"
+        aura_socket.send_status("battery", f"{icon} {level}%")
+
+        # Read thresholds from DB; fall back to safe defaults
+        try:
+            warn_thresh = int(db.get("battery_warning_threshold") or "20")
+        except (ValueError, TypeError):
+            warn_thresh = 20
+        try:
+            crit_thresh = int(db.get("battery_critical_threshold") or "10")
+        except (ValueError, TypeError):
+            crit_thresh = 10
+
+        # Critical alert — immediate delivery, no LLM latency
+        if level <= crit_thresh and not _batt_warned_critical:
+            _batt_warned_critical = True
+            immediate_queue.put({
+                "type":    IMMEDIATE,
+                "message": (
+                    f"Critical battery warning — I'm at {level}% power. "
+                    f"Please plug me in immediately."
+                ),
+                "source":  "battery",
+            })
+
+        # Low-battery warning — delivered naturally via LLM
+        elif level <= warn_thresh and not _batt_warned_low:
+            _batt_warned_low = True
+            llm_check_queue.put(
+                f"Battery level is at {level}%. Let the user know the battery is getting "
+                f"low and suggest plugging in soon. Keep it brief and natural."
+            )
+
+        # Reset warning flags once battery recovers or charging begins
+        if charging or level > warn_thresh + 5:
+            _batt_warned_low      = False
+            _batt_warned_critical = False
+
+    except Exception:
+        pass
+
+
 def _check_dream():
     """Trigger dream cycle only when idle and silence threshold reached."""
     global _dream_running
@@ -208,6 +272,7 @@ def _awareness_loop():
             _next_full_check = now + interval_sec
 
             _check_temperature()
+            _check_battery()
             _check_dream()
 
             try:

@@ -4,3 +4,7 @@ __pycache__/
 aura.db
 .env
 logs/
+.claude/
+*.old
+knowledge/processed/
+knowledge/upload/

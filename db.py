@@ -31,11 +31,17 @@ DEFAULTS = {
     "quiet_hours_end":        ("07:00",                "End of quiet hours (HH:MM)",              1),
     "awareness_interval":     ("5",                    "Awareness check interval in minutes",     1),
     "critical_temp_threshold":("80",                   "CPU temp threshold for warnings (C)",     1),
+    "battery_warning_threshold":  ("20",              "Battery % for low-battery warning",       1),
+    "battery_critical_threshold": ("10",              "Battery % for critical alert",            1),
+    "pisugar3_socket":            ("",                "PiSugar 3 server socket path (empty=default)", 1),
     "audio_enabled":          ("1",                    "TTS audio output enabled (1=on, 0=off)",  1),
     "debug_tools":            ("0",                    "Print tool call args and results to console (1=on)", 1),
     "stt_enabled":            ("1",                    "STT voice input enabled (1=on, 0=off)",   1),
     "stt_microphone":         ("",                     "STT default microphone device name (empty=system default)", 1),
     "stt_model":              ("tiny",                 "Whisper model size: tiny/base/small",     1),
+    "clock_format":           ("24",                   "Clock display format: 24 or 12 hour",     1),
+    "theme":                  ("dark",                 "UI colour theme: dark or light",           1),
+    "privacy_mode":           ("0",                    "Privacy mode — STT disabled until toggled off", 0),
 }
 
 def get_connection():
@@ -160,6 +166,44 @@ def init_db():
                 checked    INTEGER DEFAULT 0,
                 created_at TEXT NOT NULL
             )
+        """)
+
+        # Knowledge base: imported documents and their text chunks
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS knowledge_docs (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename      TEXT NOT NULL,
+                original_path TEXT,
+                chunk_count   INTEGER DEFAULT 0,
+                added_at      TEXT NOT NULL
+            )
+        """)
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS knowledge_chunks (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                doc_id      INTEGER NOT NULL REFERENCES knowledge_docs(id),
+                chunk_index INTEGER NOT NULL,
+                content     TEXT NOT NULL
+            )
+        """)
+
+        conn.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_chunks_fts
+            USING fts5(content, content='knowledge_chunks', content_rowid='id')
+        """)
+
+        conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS kc_ai AFTER INSERT ON knowledge_chunks BEGIN
+                INSERT INTO knowledge_chunks_fts(rowid, content) VALUES (new.id, new.content);
+            END
+        """)
+
+        conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS kc_ad AFTER DELETE ON knowledge_chunks BEGIN
+                INSERT INTO knowledge_chunks_fts(knowledge_chunks_fts, rowid, content)
+                VALUES ('delete', old.id, old.content);
+            END
         """)
 
         conn.commit()
@@ -609,6 +653,66 @@ def note_item_delete(item_id):
         if row:
             conn.execute("UPDATE notes SET updated_at = ? WHERE id = ?",
                          (datetime.now().isoformat(), row["note_id"]))
+        conn.commit()
+
+
+# --- Knowledge base ---
+
+def knowledge_doc_add(filename, original_path, chunk_count):
+    with get_connection() as conn:
+        cur = conn.execute("""
+            INSERT INTO knowledge_docs (filename, original_path, chunk_count, added_at)
+            VALUES (?, ?, ?, ?)
+        """, (filename, original_path, chunk_count, datetime.now().isoformat()))
+        conn.commit()
+        return cur.lastrowid
+
+def knowledge_chunk_add(doc_id, chunk_index, content):
+    with get_connection() as conn:
+        conn.execute("""
+            INSERT INTO knowledge_chunks (doc_id, chunk_index, content)
+            VALUES (?, ?, ?)
+        """, (doc_id, chunk_index, content))
+        conn.commit()
+
+def knowledge_search(query, limit=5):
+    """Full-text search across all knowledge chunks. Returns list of dicts."""
+    safe_query = " ".join(
+        '"' + w.replace('"', '') + '"'
+        for w in query.split()
+        if w.replace('"', '').strip()
+    )
+    if not safe_query:
+        return []
+    with get_connection() as conn:
+        try:
+            rows = conn.execute("""
+                SELECT kc.content, kd.filename, kc.chunk_index,
+                       knowledge_chunks_fts.rank AS rank
+                FROM knowledge_chunks_fts
+                JOIN knowledge_chunks kc ON knowledge_chunks_fts.rowid = kc.id
+                JOIN knowledge_docs kd ON kc.doc_id = kd.id
+                WHERE knowledge_chunks_fts MATCH ?
+                ORDER BY rank
+                LIMIT ?
+            """, (safe_query, limit)).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+def knowledge_list_docs():
+    with get_connection() as conn:
+        rows = conn.execute("""
+            SELECT id, filename, chunk_count, added_at
+            FROM knowledge_docs
+            ORDER BY added_at DESC
+        """).fetchall()
+        return [dict(r) for r in rows]
+
+def knowledge_delete_doc(doc_id):
+    with get_connection() as conn:
+        conn.execute("DELETE FROM knowledge_chunks WHERE doc_id = ?", (doc_id,))
+        conn.execute("DELETE FROM knowledge_docs WHERE id = ?", (doc_id,))
         conn.commit()
 
 
