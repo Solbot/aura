@@ -326,6 +326,14 @@ def chat(user_input, hot_memory_note=None, msg_id=None):
         if hot_memory_note:
             _dynamic_prompt += f"\n\n[Background awareness]: {hot_memory_note}"
 
+        # Auto-retrieve relevant knowledge base chunks for this turn
+        _kb_results = knowledge.search(user_input, limit=3)
+        if _kb_results:
+            _kb_parts = ["RELEVANT KNOWLEDGE BASE EXCERPTS (use these to inform your answer):"]
+            for _r in _kb_results:
+                _kb_parts.append(f"[{_r['filename']}]\n{_r['content']}")
+            _dynamic_prompt += "\n\n" + "\n\n---\n".join(_kb_parts)
+
         for _ in range(5):
             # Get full context including warm summaries
             messages = memory.get_context(_dynamic_prompt)

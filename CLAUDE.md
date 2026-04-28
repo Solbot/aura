@@ -81,6 +81,20 @@ Three queues bridge the awareness thread to the main loop:
 
 Background awareness notes (date changes, birthdays) are retrieved from `hot_memory_queue` by the main loop and passed to `chat()` as `hot_memory_note`. Inside `chat()`, the note is appended to `_dynamic_prompt` (the per-turn system prompt), **not** added to hot memory via `add_message()`. System-role messages added via `add_message()` are filtered out by `get_context()` and would never reach the LLM.
 
+## Knowledge Base (RAG)
+
+`knowledge.py` watches `~/knowledge/upload/`, extracts text, chunks it, and indexes it in SQLite FTS5. Files are moved to `~/knowledge/processed/` after indexing.
+
+**Supported formats:** `.pdf` (pypdf), `.docx` (python-docx, including table cells), and plain-text formats (`.txt`, `.md`, `.rst`, `.csv`, `.json`, `.html`, `.htm`, `.xml`). Image-based (scanned) PDFs are not supported — pypdf cannot extract text from raster images; pre-process them externally before ingestion.
+
+**Chunking:** 400-word chunks with 40-word overlap, indexed via FTS5 BM25.
+
+**Retrieval — automatic pre-retrieval (not LLM-initiated):** At the start of every `chat()` call, `knowledge.search(user_input, limit=3)` runs automatically. If results are found they are injected into `_dynamic_prompt` for that turn under the heading `RELEVANT KNOWLEDGE BASE EXCERPTS`. The LLM receives the content directly without needing to decide to call a tool. FTS5 is keyword-based, so specific queries retrieve better than vague ones.
+
+**LLM-initiated fallback:** `knowledge_search` and `list_knowledge_docs` tools remain registered (FREE tier) so the LLM can still search explicitly when needed.
+
+**Ingest trigger:** `watch_once()` is called on a periodic interval (`_KNOWLEDGE_INTERVAL`) and also via the `process_knowledge` socket message.
+
 ## Key Design Decisions
 
 - **`reminder_cancel` deletes rows**; `reminder_mark_fired` marks them (used internally after a one-shot reminder fires). Cancelled reminders do not persist.
