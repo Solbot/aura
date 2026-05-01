@@ -11,8 +11,8 @@
 | Storage | Silicon Power P34A60 256GB NVMe M.2 2280 | SM2263XT controller, verified Pi 5 compatible |
 | NVMe HAT | Freenove M.2 NVMe Adapter V2 | PCIe 2.0/3.0, supports 2230/2242/2260/2280 |
 | Display | 10" touchscreen 1024x600 | Status display, notes, apps |
-| Audio Out | Built into touchscreen | |
-| Audio In | QuickCam Pro 9000 (USB) | Card 2 on this machine; ALSA routed via `/etc/asound.conf` |
+| Audio Out | User-configured (default: built-in display audio) | Named device stored in config; fallback chain on device loss |
+| Audio In | User-configured (default: first available input device) | Named device stored in config; fallback chain on device loss |
 | Power | PiSugar 3 Plus | Portable power; managed via pisugar-server daemon |
 | Case | Custom design - 3D printed | Later |
 
@@ -22,13 +22,13 @@
 
 | Component | Decision | Notes |
 |---|---|---|
-| OS | Raspberry Pi OS Lite 64-bit | Minimal, no desktop, boots from NVMe |
+| OS | Raspberry Pi OS with Desktop 64-bit | Full desktop environment; AURA runs as a desktop application |
 | Inference Engine | llama.cpp | Better than Ollama on constrained hardware |
 | LLM Model | Llama 3.1 8B Q4_K_M | Best tool use at Pi-friendly size |
 | STT | faster-whisper tiny | Always-on wake-word listener; wake phrase "Hey AURA" |
 | TTS | Piper TTS | en_US-amy-medium, female default |
 | Language | Python | Primary development language |
-| UI Framework | GTK4 | Replaced Kivy; tile-based touch interface |
+| UI Framework | GTK4 | Desktop application; resizable, minimisable window — not fullscreen kiosk |
 
 ---
 
@@ -76,12 +76,39 @@ Nothing is ever deleted without explicit user instruction (cold archive is perma
 
 ## UI Design
 
-- Tile-based touch interface inspired by Windows Phone/Win8 concept
-- Header bar: assistant name · mic selector · connection status · clock · CPU temp · RAM · battery
-- Chat scroll area: message bubbles pushed to bottom, auto-scrolls on new content
-- Input bar: wrapping Gtk.TextView with Shift+Enter for newline, Enter to send
-- GTK4 (Python, gi) — implemented; runs under system python3 with venv PYTHONPATH for STT deps
-- Fullscreen, no traditional desktop chrome
+### Philosophy
+AURA is a desktop application, not a kiosk. The window is resizable, minimisable,
+and closable. The user can run other applications alongside AURA without being trapped.
+
+- Animated character (Microsoft Fluent Emoji) as primary visual element
+- Character states drive animation:
+  | Character State | AURA State |
+  |---|---|
+  | Idle/ambient | Waiting for input |
+  | Thinking | LLM processing |
+  | Speaking | TTS active |
+  | Using tools | Tool execution in progress |
+  | Sleeping | Dream cycle running |
+  | Listening | Wake word detected, STT active |
+- Chat history and status information secondary to character
+- Normal GTK4 window decorations — title bar, minimise, maximise, close
+- Touch and mouse input supported
+- Resizable — useful content at any reasonable window size
+
+### UI as Optional Layer
+`aura.py` is a fully independent process. It operates without any UI attached.
+`aura_gtk.py` connects to the backend via Unix socket and is purely presentational.
+The UI can be closed, minimised, or replaced entirely without affecting AURA's operation.
+AURA continues to listen, think, remember, and speak regardless of UI state.
+
+### Alternative UI Policy
+The Unix socket protocol at `/tmp/aura.sock` is the public interface contract.
+Any process that speaks the protocol can act as a frontend:
+- Terminal client (`terminal_client.py`) — already implemented
+- GTK4 UI (`aura_gtk.py`) — primary UI
+- Future: web UI, alternative GTK themes, third-party UIs
+- Backend owns all intelligence. No AURA logic may live in the UI layer.
+- UI developers get a fully functional talking, listening AURA out of the box.
 
 ---
 
@@ -117,6 +144,9 @@ Nothing is ever deleted without explicit user instruction (cold archive is perma
 - User data stays local always
 - Transparent about being an AI if sincerely asked
 - Session logging of violations for developer reference
+- Transparent about how it works: if AURA cannot explain a behaviour in plain
+  language to the user, that behaviour should not exist in the system.
+  If AURA can't explain it, it shouldn't do it.
 
 ---
 
@@ -212,7 +242,7 @@ All commands start with `/` and are intercepted before reaching the LLM (instant
 
 ## Current Status
 
-- [x] Pi OS Lite 64-bit installed and booting from NVMe
+- [x] Pi OS with Desktop 64-bit installed and booting from NVMe
 - [x] PCIe Gen 3 configured and verified
 - [x] llama.cpp compiled with Cortex-A76 optimisations
 - [x] Llama 3.1 8B Q4_K_M downloaded
@@ -244,9 +274,18 @@ All commands start with `/` and are intercepted before reaching the LLM (instant
 - [x] Reminders tool (set/list/cancel)
 - [x] Scheduled tasks tool (create/list/delete/run)
 - [x] Knowledge base / RAG (FTS5 index, upload folder watch, knowledge_search tool)
-- [ ] CSAM privileged logging service (systemd socket)
+- [x] CSAM privileged logging service (systemd socket + csam_logger.py)
+- [x] STT moved to aura.py (operates independently of UI)
+- [x] Audio device configuration (tts_speaker, stt_microphone, fallback)
+- [x] Audio fallback chain (primary → fallback → system default)
+- [ ] PipeWire device disconnect monitoring (future enhancement)
+- [ ] Vosk wake word detection (replaces faster-whisper for always-on)
+- [ ] Fluent Emoji animated character UI
+- [ ] Proactive agency engine
+- [ ] Engagement velocity model
+- [ ] Suppressed suggestions store
+- [ ] Weather tool
 - [ ] Mud map sketch tool
-- [ ] Weather tool (connected mode)
 
 ---
 

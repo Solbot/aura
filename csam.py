@@ -1,5 +1,6 @@
 import os
 import json
+import socket
 from datetime import datetime
 
 # CSAM response system — hardcoded, non-configurable, always active.
@@ -65,21 +66,32 @@ def _get_resource(location):
         return _RESOURCES[location.upper()]
     return _DEFAULT_RESOURCE
 
+CSAM_SOCKET = "/run/aura-csam.sock"
+
 def _log(conversation, trigger_input):
+    entry = {
+        "timestamp":     datetime.now().isoformat(),
+        "trigger_input": trigger_input,
+        "conversation":  conversation,
+    }
+    # Try privileged socket first (csam_logger.py running as root)
     try:
-        os.makedirs(_LOG_DIR, exist_ok=True)
-        entry = {
-            "timestamp": datetime.now().isoformat(),
-            "trigger_input": trigger_input,
-            "conversation": conversation
-        }
-        with open(_LOG_FILE, "a") as f:
-            f.write(json.dumps(entry) + "\n")
-    except PermissionError:
-        # Log directory requires root — silently fail log, still enforce refusal
-        pass
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.connect(CSAM_SOCKET)
+        sock.sendall((json.dumps(entry) + "\n").encode("utf-8"))
+        sock.close()
+        return
     except Exception:
         pass
+    # Fallback — direct write (will fail without root; silently swallowed)
+    try:
+        os.makedirs(_LOG_DIR, exist_ok=True)
+        with open(_LOG_FILE, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:
+        pass
+    # If both fail, detection and user-facing behaviour still happened —
+    # logging success is never a precondition for the safety response.
 
 def handle(conversation, trigger_input, location, speak_fn, print_fn):
     resource = _get_resource(location)

@@ -1,0 +1,11 @@
+[Unit]
+Description=AURA CSAM Logging Socket
+
+[Socket]
+ListenStream=/run/aura-csam.sock
+SocketMode=0660
+SocketUser=root
+SocketGroup=aura
+
+[Install]
+WantedBy=sockets.target

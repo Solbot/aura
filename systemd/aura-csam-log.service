@@ -1,0 +1,11 @@
+[Unit]
+Description=AURA CSAM Privileged Logger
+Requires=aura-csam-log.socket
+
+[Service]
+Type=simple
+User=root
+ExecStart=/home/aura/aura/csam_logger.py
+StandardInput=socket
+Restart=on-failure
+RestartSec=5

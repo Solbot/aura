@@ -5,19 +5,20 @@ AURA is an AI companion running on a Raspberry Pi 5. It combines local LLM infer
 ## Architecture
 
 ```
-systemd
+systemd (future — not yet configured on fresh install)
 ├── aura.service      → venv/bin/python aura.py
 └── aura-ui.service   → launch_ui.sh → python3 aura_gtk.py
 
-aura.py          (core — LLM loop, tool execution, memory management)
+aura.py          (core — LLM loop, tool execution, memory, TTS, STT)
 │   ├── aura_socket  (Unix socket IPC to UI)
-│   ├── awareness    (background thread — reminders, temperature, battery, dream)
+│   ├── awareness    (background thread — reminders, temperature, battery, dream, audio monitoring)
 │   ├── memory       (hot/warm/cold three-tier memory)
+│   ├── stt          (BackgroundListener — always-on wake-word STT, daemon thread)
 │   ├── tools/       (function-calling tool registry)
 │   ├── hardware/    (hardware device registry + drivers)
 │   └── db           (SQLite — all persistence)
 aura_gtk.py      (GTK4 UI — connects to aura via /tmp/aura.sock)
-│   └── stt.py       (BackgroundListener — always-on wake-word STT)
+│   └── display/input only — no AURA logic lives here
 ```
 
 Two separate processes communicate over a Unix domain socket at `/tmp/aura.sock`. `aura.py` owns all LLM logic; `aura_gtk.py` is pure display and input.
@@ -102,9 +103,93 @@ Background awareness notes (date changes, birthdays) are retrieved from `hot_mem
 - **Quiet hours** suppress date-event notes only. Reminders and scheduled tasks are always delivered.
 - **`birth_year`** is handled both via `_DURATION_TO_DATE` (merging it into birthday when birthday lacks a year) and via a special case lower in `store_fact`. The `_DURATION_TO_DATE` path returns early, so the special case is only reached when no birthday fact exists yet.
 
+## Audio Architecture
+
+TTS (Piper) and STT (faster-whisper BackgroundListener) live in `aura.py`, not in
+the UI. Hearing and speaking are core AURA functions, not UI features. An alternative
+UI or headless operation gets full audio capability automatically.
+
+### Device Selection
+Audio devices are stored by name in the config table:
+- `tts_speaker` — output device name; empty = system default
+- `stt_microphone` — input device name; empty = first available input device
+
+Device names are resolved at startup via PipeWire/PortAudio enumeration.
+Named devices are more stable than card numbers across reboots.
+
+### Fallback Chain
+If a configured device becomes unavailable (e.g. bluetooth headset battery dies):
+1. Primary — configured device (`tts_speaker` / `stt_microphone`)
+2. Secondary — any available wired/built-in alternative
+3. Emergency (output only) — HDMI/display audio; always present while display connected
+
+On primary device loss:
+- awareness thread detects disconnection via PipeWire device events
+- AURA speaks notification through fallback output immediately
+- UI receives `system_message` with warning level
+- STT switches to text-input-only mode if microphone lost (cannot fabricate input)
+- State restores automatically when primary device reconnects
+
+### Fallback Device Configuration
+Fallback devices are configured in Settings, not during first boot.
+First boot is for relationship calibration only — not technical contingency planning.
+
+### What Belongs Where
+First boot: name, tone, use case, proactive suggestion frequency calibration
+Settings: audio devices, fallback devices, wake word prefix, voice model,
+          voice speed, quiet hours, dream delay, connectivity endpoints,
+          STT model size, battery thresholds, all technical configuration
+
+---
+
+## Socket Protocol
+
+`/tmp/aura.sock` is the public interface contract between backend and any frontend.
+Treat it as a stable API. Do not make breaking changes without updating this document.
+
+### Aura → UI messages
+| Type | Fields | Effect |
+|------|--------|--------|
+| `chat_response` | `text`, `id` | Append AURA message |
+| `system_message` | `text`, `level` | Status notification (info/warning/error) |
+| `status_update` | `key`, `value` | Update header widget (cpu_temp, memory, battery, etc) |
+| `tts_start` | — | TTS beginning — mute STT if UI manages audio |
+| `tts_end` | — | TTS complete — unmute STT |
+| `ui_command` | `tool`, `args` | Execute a UI-side action |
+| `ui_query` | `filter`, `request_id` | Request tile/device state from UI |
+| `device_list` | `device_type`, `devices`, `request_id` | Response to device enumeration request |
+
+### UI → Aura messages
+| Type | Fields | Effect |
+|------|--------|--------|
+| `chat_input` | `text`, `id` | User message |
+| `ping` | — | Keepalive |
+| `ui_response` | `request_id`, data | Response to ui_query |
+| `shutdown` | — | Graceful shutdown request |
+| `device_query` | `device_type`, `request_id` | Request available audio devices of type (input/output) |
+
+---
+
+## Wake Word
+
+Wake phrase format: `"{prefix} {assistant_name}"` e.g. "Hey AURA", "OK AURA"
+
+- Default prefixes: "Hey" and "OK" (both active until user configures preference)
+- Prefix is configurable in Settings after first boot
+- Assistant name comes from `assistant_name` db config (set during first boot)
+- Wake phrase matching: case-insensitive, allows up to 15 chars leading noise
+- On first boot completion, AURA informs the user:
+  "You can get my attention by saying Hey {name} or OK {name}.
+   You can change that in settings."
+
+Current implementation: faster-whisper (sliding window, 50% overlap)
+Planned: Vosk for always-on wake detection; faster-whisper retained for transcription
+
+---
+
 ## Speech-to-Text (`stt.py`)
 
-Always-on wake-word listener running as a daemon thread inside `aura_gtk.py`.
+Always-on wake-word listener running as a daemon thread inside `aura.py`.
 
 **Dependencies** (installed in venv): `faster-whisper`, `sounddevice`. System package: `libportaudio2`.
 
@@ -137,7 +222,7 @@ The 50% sliding window prevents wake words from being missed when they straddle 
 
 **Model storage** — Whisper model downloaded on first use to `~/models/whisper/` (~40 MB for tiny).
 
-**GTK integration** — all `BackgroundListener` callbacks are invoked from the background thread; callers wrap them in `GLib.idle_add`. The `_mic_populating` flag suppresses spurious `notify::selected` signals during programmatic dropdown setup.
+**Backend integration** — `BackgroundListener.on_transcript` puts transcribed text directly into `aura_socket.incoming_queue` as a `chat_input` message, so it enters the main loop exactly like typed input.
 
 **UI indicator** — header bar shows `🎤 [device dropdown]`; state label shows `loading…` during model load and `● listening` (green) while in active phase.
 

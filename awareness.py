@@ -36,6 +36,9 @@ DREAM_COOLDOWN = 10     # Seconds to wait after LLM finishes before dreaming
 _batt_warned_low      = False
 _batt_warned_critical = False
 
+# Microphone watchdog — tracks whether the configured mic was last seen present
+_mic_was_available = None
+
 # Callback wired by aura.py to rebuild SYSTEM_PROMPT after the dream cycle
 # updates the user profile.
 _on_dream_complete = None
@@ -226,6 +229,25 @@ def _check_battery():
         pass
 
 
+def _check_microphone():
+    """Warn if the configured microphone disappears between full check cycles."""
+    global _mic_was_available
+    configured = db.get("stt_microphone") or ""
+    if not configured:
+        return  # using first-available default; can't monitor by name
+    try:
+        import sounddevice as sd
+        names = [d['name'] for d in sd.query_devices() if d['max_input_channels'] > 0]
+        present = configured in names
+    except Exception:
+        return
+    if _mic_was_available is True and not present:
+        aura_socket.send_system_message(
+            f"Configured microphone '{configured}' is no longer available.", "warning"
+        )
+    _mic_was_available = present
+
+
 def _check_dream():
     """Trigger dream cycle only when idle and silence threshold reached."""
     global _dream_running
@@ -273,6 +295,7 @@ def _awareness_loop():
 
             _check_temperature()
             _check_battery()
+            _check_microphone()
             _check_dream()
 
             try:

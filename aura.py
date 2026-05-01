@@ -7,6 +7,7 @@ import threading
 import db
 import csam
 import tools
+import stt
 import first_boot
 import awareness
 import memory
@@ -14,6 +15,8 @@ import commands
 import aura_socket
 import knowledge
 from piper import PiperVoice, SynthesisConfig
+
+_listener = None
 
 # --- Initialise database and tools ---
 db.init_db()
@@ -34,20 +37,46 @@ def load_voice():
     return v, sc
 
 voice, syn_config = load_voice()
-SAMPLE_RATE  = 22050
-AUDIO_DEVICE = "default"
+SAMPLE_RATE = 22050
+
+def _try_aplay(audio, device_args):
+    """Play raw PCM audio via aplay with given device args. Returns True on success."""
+    try:
+        proc = subprocess.Popen(
+            ["aplay", "-q", "-f", "S16_LE", "-r", str(SAMPLE_RATE),
+             "-c", "1", "-t", "raw"] + device_args + ["-"],
+            stdin=subprocess.PIPE,
+        )
+        proc.communicate(input=audio)
+        return proc.returncode == 0
+    except Exception:
+        return False
+
 
 def speak(text):
     if db.get('audio_enabled') == '0':
         return
     audio = b"".join(chunk.audio_int16_bytes for chunk in voice.synthesize(text))
+
     aura_socket.send({"type": "tts_start"})
-    proc  = subprocess.Popen(
-        ["aplay", "-q", "-f", "S16_LE", "-r", str(SAMPLE_RATE),
-         "-c", "1", "-t", "raw", "-D", AUDIO_DEVICE, "-"],
-        stdin=subprocess.PIPE
-    )
-    proc.communicate(input=audio)
+    if _listener:
+        _listener.mute()
+
+    primary  = db.get('tts_speaker') or ''
+    fallback = db.get('audio_fallback_speaker') or ''
+
+    device_args = ['-D', primary] if primary else []
+    success = _try_aplay(audio, device_args)
+    if not success and fallback:
+        _try_aplay(audio, ['-D', fallback])
+        aura_socket.send_system_message(
+            "Primary speaker unavailable — using fallback audio", "warning"
+        )
+    elif not success and primary:
+        _try_aplay(audio, [])   # last resort: system default
+
+    if _listener:
+        _listener.unmute()
     aura_socket.send({"type": "tts_end"})
 
 # --- Start IPC socket server (must be up before first boot so the UI can connect) ---
@@ -60,6 +89,35 @@ if db.is_first_boot():
 
 # --- Start background awareness thread ---
 awareness.start()
+
+# --- Start background STT listener ---
+def _start_stt():
+    global _listener
+    if not stt.available():
+        print("[stt] not available — skipping", flush=True)
+        return
+    if db.get('stt_enabled') != '1':
+        print("[stt] disabled in config — skipping", flush=True)
+        return
+    if db.get('privacy_mode') == '1':
+        print("[stt] privacy mode active — skipping", flush=True)
+        return
+    name         = (db.get('assistant_name') or 'Aura').lower()
+    wake_phrases = [name, f"hey {name}", f"hey, {name}"]
+    model_sz     = db.get('stt_model') or 'tiny'
+    device       = db.get('stt_microphone') or ''
+    _listener = stt.BackgroundListener(
+        wake_phrases = wake_phrases,
+        on_transcript = lambda t: aura_socket.incoming_queue.put(
+            {"type": "chat_input", "text": t, "id": None}
+        ) if t else None,
+        device_name  = device,
+        model_size   = model_sz,
+    )
+    _listener.start()
+    print("[stt] BackgroundListener started in backend", flush=True)
+
+_start_stt()
 
 # --- Build system prompt ---
 def _web_search_rules():
@@ -497,6 +555,25 @@ while True:
         continue
 
     msg_type = socket_msg.get("type")
+
+    if msg_type == "device_query":
+        _device_type = socket_msg.get("device_type", "input")
+        _request_id  = socket_msg.get("request_id", "")
+        _devices = []
+        try:
+            import sounddevice as _sd
+            for _i, _d in enumerate(_sd.query_devices()):
+                if _device_type == "input"  and _d['max_input_channels']  > 0:
+                    _devices.append({"name": _d['name'], "index": _i})
+                elif _device_type == "output" and _d['max_output_channels'] > 0:
+                    _devices.append({"name": _d['name'], "index": _i})
+        except Exception:
+            pass
+        aura_socket.send({
+            "type": "device_list", "device_type": _device_type,
+            "devices": _devices, "request_id": _request_id,
+        })
+        continue
 
     if msg_type == "process_knowledge":
         _run_knowledge_watch()
