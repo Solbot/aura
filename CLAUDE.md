@@ -5,9 +5,11 @@ AURA is an AI companion running on a Raspberry Pi 5. It combines local LLM infer
 ## Architecture
 
 ```
-systemd (future — not yet configured on fresh install)
-├── aura.service      → venv/bin/python aura.py
-└── aura-ui.service   → launch_ui.sh → python3 aura_gtk.py
+systemd
+└── aura.service      → venv/bin/python aura.py
+
+labwc autostart (~/.config/labwc/autostart)
+└── launch_ui.sh      → python3 aura_gtk.py
 
 aura.py          (core — LLM loop, tool execution, memory, TTS, STT)
 │   ├── aura_socket  (Unix socket IPC to UI)
@@ -17,13 +19,13 @@ aura.py          (core — LLM loop, tool execution, memory, TTS, STT)
 │   ├── tools/       (function-calling tool registry)
 │   ├── hardware/    (hardware device registry + drivers)
 │   └── db           (SQLite — all persistence)
-aura_gtk.py      (GTK4 UI — connects to aura via /tmp/aura.sock)
+aura_gtk.py      (GTK4 desktop app — connects to aura via /tmp/aura.sock)
 │   └── display/input only — no AURA logic lives here
 ```
 
-Two separate processes communicate over a Unix domain socket at `/tmp/aura.sock`. `aura.py` owns all LLM logic; `aura_gtk.py` is pure display and input.
+Two separate processes communicate over a Unix domain socket at `/tmp/aura.sock`. `aura.py` owns all LLM logic; `aura_gtk.py` is a GTK4 desktop application with pure display and input responsibility.
 
-Both processes are managed by systemd (`aura.service`, `aura-ui.service`) and start automatically on boot. `aura-ui.service` requires `aura.service` and polls for `/tmp/aura.sock` before launching the UI.
+`aura.service` (systemd) manages the backend and starts on boot. The UI is a desktop application launched by labwc at session start via `~/.config/labwc/autostart`. If the backend socket isn't ready yet, the UI shows "Connecting…" and reconnects automatically every 2 s.
 
 ## LLM Endpoint Selection
 
@@ -296,14 +298,14 @@ The UI runs under system `python3` (which owns `gi`/GTK) but needs venv packages
 ## Running
 
 ```bash
-# Managed by systemd (normal operation):
-sudo systemctl start aura        # backend
-sudo systemctl start aura-ui     # UI (waits for backend socket)
+# Normal operation:
+sudo systemctl start aura        # backend (systemd)
+# UI launches automatically at desktop login via ~/.config/labwc/autostart
 
 # Manual (development):
 cd ~/aura/aura
 venv/bin/python3 aura.py         # backend
-./launch_ui.sh                   # UI (sets env, then exec python3 aura_gtk.py)
+./launch_ui.sh                   # UI (injects venv PYTHONPATH, then exec python3 aura_gtk.py)
 ```
 
 First boot runs `first_boot.py` which requires a reachable LLM endpoint to complete the onboarding conversation.

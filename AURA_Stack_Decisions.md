@@ -81,7 +81,7 @@ Nothing is ever deleted without explicit user instruction (cold archive is perma
 AURA is a desktop application, not a kiosk. The window is resizable, minimisable,
 and closable. The user can run other applications alongside AURA without being trapped.
 
-- Animated character (Microsoft Fluent Emoji) as primary visual element
+- Animated character (Microsoft Fluent Emoji) as primary visual element (planned — not yet implemented)
 - Character states drive animation:
   | Character State | AURA State |
   |---|---|
@@ -96,11 +96,32 @@ and closable. The user can run other applications alongside AURA without being t
 - Touch and mouse input supported
 - Resizable — useful content at any reasonable window size
 
+### Implemented Header Controls
+| Control | Function |
+|---|---|
+| Assistant name | Left-aligned title label |
+| 🎤 + device dropdown | Mic selector (populated via backend device_query on connect) |
+| Connection status | Connected / Disconnected / Connecting… |
+| Clock | Configurable 12/24-hour format |
+| CPU temp | From `/sys/class/thermal/thermal_zone0/temp`; colour-coded |
+| RAM | Used MB from `/proc/meminfo` |
+| Battery | Hidden until PiSugar reports; colour-coded by threshold |
+| CPU % | Delta from `/proc/stat` over 5 s window |
+| 🔒 Privacy button | Toggle privacy mode — stops STT listening until toggled off |
+| 📚 Knowledge button | File chooser to import docs to knowledge base |
+| ⚙ Settings button | Opens in-window settings overlay |
+
 ### UI as Optional Layer
 `aura.py` is a fully independent process. It operates without any UI attached.
 `aura_gtk.py` connects to the backend via Unix socket and is purely presentational.
 The UI can be closed, minimised, or replaced entirely without affecting AURA's operation.
 AURA continues to listen, think, remember, and speak regardless of UI state.
+
+### Fullscreen Default
+The UI launches in fullscreen mode to maximise the 10" touch display. F11 toggles
+between fullscreen and windowed mode. This is a deliberate departure from the
+"not fullscreen kiosk" philosophy — the window is still resizable and closable once
+un-fullscreened, and the backend remains independent regardless. Ctrl+Q exits.
 
 ### Alternative UI Policy
 The Unix socket protocol at `/tmp/aura.sock` is the public interface contract.
@@ -110,6 +131,29 @@ Any process that speaks the protocol can act as a frontend:
 - Future: web UI, alternative GTK themes, third-party UIs
 - Backend owns all intelligence. No AURA logic may live in the UI layer.
 - UI developers get a fully functional talking, listening AURA out of the box.
+
+---
+
+## Settings Panel
+
+An in-window overlay accessible via the ⚙ header button. Saves directly to the SQLite
+config table. Does not require a restart except for STT device changes.
+
+| Section | Settings |
+|---|---|
+| Identity | assistant_name, assistant_gender, user_name, user_informal_name, location |
+| Personality | tone_preference, personality_traits, use_case, failure_mode |
+| Voice & Audio | audio_enabled, voice_model (Piper), voice_speed |
+| Speech Input | stt_enabled, wake_prefix, stt_model (Whisper size), vosk_model_path |
+| Web & Search | auto_search (proactive vs on-request) |
+| LLM Endpoints | home_pc_endpoint, remote_api_endpoint |
+| Background & Memory | dream_delay, awareness_interval, quiet_hours_start, quiet_hours_end |
+| Display | theme (dark/light), clock_format (24/12) |
+| Hardware | critical_temp_threshold, battery_warning_threshold, battery_critical_threshold, pisugar3_socket |
+| Debug | debug_tools (print tool calls to console) |
+
+First boot sets: assistant_name, assistant_gender, user_name, user_informal_name, location, tone_preference, use_case, personality_traits.
+All settings revisable via Settings panel at any time.
 
 ---
 
@@ -170,7 +214,9 @@ Each tool is a self-contained Python module that registers with a standard inter
 - LLM decides when and which tool to call
 - Results feed back into conversation naturally
 
-**Implemented tools:** get_system_info (Pi sensors: temp, fan, disk, RAM, network, datetime), store_user_fact, get_user_facts, battery_status, web_search, fetch_page, knowledge_search, list_knowledge_docs, notes (create/list/delete), reminders (set/list/cancel), scheduled_tasks (create/list/delete/run)
+**Implemented tools:** get_system_info (Pi sensors: temp, fan, disk, RAM, network, datetime), store_user_fact, get_user_facts, battery_status, web_search, fetch_page, knowledge_search, list_knowledge_docs, notes (create/list/get/update/delete + list-item CRUD), reminders (set/list/cancel), scheduled_tasks (create/list/delete/run)
+
+**Web search mode:** `auto_search` config key (0 = on-request, 1 = proactive). Changes system prompt rules, not tool availability. Configurable in Settings.
 
 **Planned tools:** Mud map sketch, Weather (connected), Timer
 
@@ -195,6 +241,10 @@ All commands start with `/` and are intercepted before reaching the LLM (instant
 | `/clear hot` | Clear hot context |
 | `/set key value` | Set a config value |
 | `/config` | Show all config settings |
+| `/audio on\|off` | Toggle TTS audio output (persistent, survives restart) |
+| `/tools` | Toggle tool call debug output to console |
+| `/reboot` | Restart Aura backend and UI services |
+| `/wipe confirm` | Wipe all data and reset to first-boot state (CSAM log preserved) |
 
 ---
 
@@ -215,29 +265,38 @@ All commands start with `/` and are intercepted before reaching the LLM (instant
 | File | Purpose |
 |---|---|
 | `aura.py` | Main loop, TTS, tool calls, CSAM check |
-| `aura_gtk.py` | GTK4 UI — tile layout, chat area, header bar, STT integration |
+| `aura_gtk.py` | GTK4 UI — settings overlay, chat area, header bar, STT integration |
+| `aura_socket.py` | IPC socket server — JSON-line protocol between backend and UI |
 | `db.py` | SQLite — config, user_profile, reminders, tasks, notes, warm/cold memory, knowledge, web cache |
 | `memory.py` | Three-tier hot/warm/cold memory manager |
 | `dream.py` | Sleep/dream memory consolidation cycle |
-| `awareness.py` | Background thread: reminders, thermal, battery, dream trigger, busy lock |
+| `awareness.py` | Background thread: reminders, thermal, battery, mic watchdog, dream trigger, busy lock |
 | `commands.py` | Debug/utility slash commands |
 | `csam.py` | Hardcoded CSAM safety — never configurable |
+| `csam_logger.py` | Privileged CSAM log writer (receives via socket, writes to /var/log/aura/csam/) |
 | `first_boot.py` | First-date conversation, populates config and user_profile (source='first_boot') |
 | `knowledge.py` | RAG engine: watches ~/knowledge/upload, chunks + indexes via SQLite FTS5 |
-| `stt.py` | BackgroundListener — always-on wake-word STT (faster-whisper) |
+| `stt.py` | BackgroundListener — Vosk wake detection + faster-whisper transcription |
+| `tile_registry.py` | Tile discovery, probing, activation, state, query, and aura_context generation |
+| `terminal_client.py` | Terminal UI client (alternative to GTK4 UI) |
 | `hardware/__init__.py` | Hardware device registry |
 | `hardware/pisugar3.py` | PiSugar 3 Plus driver; registers battery_status tool |
-| `tiles/__init__.py` | Tile registry |
+| `tiles/__init__.py` | Tile package init |
 | `tiles/pisugar3_tile.py` | Battery tile (category: hardware) |
 | `tools/__init__.py` | Tool registry with FREE/CONFIRM/LOCKED tiers |
 | `tools/system_info.py` | Pi sensor tool (date/time, temp, fan, disk, RAM, network) |
 | `tools/user_profile.py` | store_user_fact / get_user_facts tools |
 | `tools/web_search.py` | web_search / fetch_page tools |
 | `tools/knowledge.py` | knowledge_search / list_knowledge_docs tools |
-| `tools/notes.py` | Notes create/list/delete tools |
+| `tools/notes.py` | Notes create/list/delete/update and list-item tools |
 | `tools/reminders.py` | Reminder set/list/cancel tools |
 | `tools/tasks.py` | Scheduled task create/list/delete/run tools |
-| `systemd/` | Systemd service files (aura.service, aura-ui.service, llama-server.service) |
+| `launch_ui.sh` | Launches aura_gtk.py with venv PYTHONPATH injected |
+| `layout.json` | UI tile layout configuration |
+| `systemd/aura.service` | Backend systemd service (starts on boot) |
+| `systemd/llama-server.service` | llama.cpp server systemd service |
+| `systemd/aura-csam-log.service` | CSAM logger systemd service (socket-activated, runs as root) |
+| `systemd/aura-csam-log.socket` | Systemd socket for CSAM logger activation |
 
 ---
 
@@ -279,8 +338,18 @@ All commands start with `/` and are intercepted before reaching the LLM (instant
 - [x] STT moved to aura.py (operates independently of UI)
 - [x] Audio device configuration (tts_speaker, stt_microphone, fallback)
 - [x] Audio fallback chain (primary → fallback → system default)
-- [ ] PipeWire device disconnect monitoring (future enhancement)
+- [x] Microphone disconnect watchdog (polls via sounddevice; warns if configured mic disappears)
+- [ ] PipeWire event-driven device monitoring (future enhancement — current impl polls)
 - [x] Vosk wake word detection (replaces faster-whisper for always-on)
+- [x] Privacy mode (🔒 header button; disables STT until toggled off; persists across restart)
+- [x] In-window settings panel (overlay; no separate window)
+- [x] Light/dark theme toggle (configurable in Settings; hot-swap CSS)
+- [x] 12/24-hour clock format (configurable in Settings)
+- [x] Auto web search mode (configurable in Settings; changes system prompt strategy)
+- [x] Knowledge base import button (📚 header; file chooser; triggers immediate ingest)
+- [x] CPU % display in header (delta-based from /proc/stat)
+- [x] Fullscreen default with F11 toggle (Ctrl+Q to quit)
+- [x] Tile registry (tile_registry.py — discovery, probing, activation, query, aura_context)
 - [ ] Fluent Emoji animated character UI
 - [ ] Proactive agency engine
 - [ ] Engagement velocity model
