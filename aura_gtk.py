@@ -520,7 +520,9 @@ class SettingsPage(Gtk.Box):
         # ── Speech Input ──────────────────────────────────────────────────
         self._section(box, "Speech Input")
         self._switch_row(box, "stt_enabled",           "Voice Input",            "Enable always-on wake-word detection",               g("stt_enabled"))
+        self._text_row(box,   "wake_prefix",           "Wake Prefix",            "Leave empty for both 'Hey' and 'OK'",                g("wake_prefix")             or "")
         self._drop_row(box,   "stt_model",             "Whisper Model",          "Larger = more accurate, slower to load",             ["tiny", "base", "small"],   g("stt_model")         or "tiny")
+        self._text_row(box,   "vosk_model_path",       "Vosk Model Path",        "Path to Vosk model directory (advanced)",            g("vosk_model_path")         or "/home/aura/models/vosk/small-en-us")
 
         # ── Web & Search ──────────────────────────────────────────────────
         self._section(box, "Web & Search")

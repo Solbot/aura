@@ -102,17 +102,10 @@ def _start_stt():
     if db.get('privacy_mode') == '1':
         print("[stt] privacy mode active — skipping", flush=True)
         return
-    name         = (db.get('assistant_name') or 'Aura').lower()
-    wake_phrases = [name, f"hey {name}", f"hey, {name}"]
-    model_sz     = db.get('stt_model') or 'tiny'
-    device       = db.get('stt_microphone') or ''
     _listener = stt.BackgroundListener(
-        wake_phrases = wake_phrases,
-        on_transcript = lambda t: aura_socket.incoming_queue.put(
+        on_transcript=lambda t: aura_socket.incoming_queue.put(
             {"type": "chat_input", "text": t, "id": None}
         ) if t else None,
-        device_name  = device,
-        model_size   = model_sz,
     )
     _listener.start()
     print("[stt] BackgroundListener started in backend", flush=True)

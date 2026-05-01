@@ -41,6 +41,8 @@ DEFAULTS = {
     "tts_speaker":            ("",                     "TTS output device name; empty = system default",            1),
     "audio_fallback_speaker": ("",                     "Fallback output device if primary unavailable",             1),
     "stt_model":              ("tiny",                 "Whisper model size: tiny/base/small",     1),
+    "vosk_model_path":        ("/home/aura/models/vosk/small-en-us", "Path to Vosk model directory for wake word detection", 1),
+    "wake_prefix":            ("",                     "Wake word prefix (e.g. 'hey', 'ok'); empty = hey and ok both active", 1),
     "clock_format":           ("24",                   "Clock display format: 24 or 12 hour",     1),
     "theme":                  ("dark",                 "UI colour theme: dark or light",           1),
     "privacy_mode":           ("0",                    "Privacy mode — STT disabled until toggled off", 0),

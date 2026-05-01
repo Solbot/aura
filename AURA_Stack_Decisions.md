@@ -25,7 +25,8 @@
 | OS | Raspberry Pi OS with Desktop 64-bit | Full desktop environment; AURA runs as a desktop application |
 | Inference Engine | llama.cpp | Better than Ollama on constrained hardware |
 | LLM Model | Llama 3.1 8B Q4_K_M | Best tool use at Pi-friendly size |
-| STT | faster-whisper tiny | Always-on wake-word listener; wake phrase "Hey AURA" |
+| STT — Wake Word | Vosk (small-en-us) | Always-on, lightweight; fires on wake phrase only |
+| STT — Transcription | faster-whisper tiny | Triggered by Vosk; accurate full transcription |
 | TTS | Piper TTS | en_US-amy-medium, female default |
 | Language | Python | Primary development language |
 | UI Framework | GTK4 | Desktop application; resizable, minimisable window — not fullscreen kiosk |
@@ -264,7 +265,7 @@ All commands start with `/` and are intercepted before reaching the LLM (instant
 - [x] Debug command system (/help, /memory, /warm, /cold, /hot, /prompt, /status, /dream, /clear, /set, /config)
 - [x] GTK4 tile UI — header bar, chat area, tile grid, touch input
 - [x] Tiered connectivity (Home PC → Remote API → Local fallback)
-- [x] STT/wake word — faster-whisper tiny, always-on BackgroundListener
+- [x] STT/wake word — Vosk always-on + faster-whisper transcription on demand
 - [x] TTS muting during AURA speech (prevents self-wake)
 - [x] Hardware plugin system (pisugar3 driver + battery tool)
 - [x] Battery awareness — live UI header, LLM warnings, critical alerts
@@ -279,7 +280,7 @@ All commands start with `/` and are intercepted before reaching the LLM (instant
 - [x] Audio device configuration (tts_speaker, stt_microphone, fallback)
 - [x] Audio fallback chain (primary → fallback → system default)
 - [ ] PipeWire device disconnect monitoring (future enhancement)
-- [ ] Vosk wake word detection (replaces faster-whisper for always-on)
+- [x] Vosk wake word detection (replaces faster-whisper for always-on)
 - [ ] Fluent Emoji animated character UI
 - [ ] Proactive agency engine
 - [ ] Engagement velocity model

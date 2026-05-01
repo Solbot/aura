@@ -134,212 +134,224 @@ def _strip_wake(text, wake_phrases):
 
 
 # ---------------------------------------------------------------------------
-# Always-on background listener
+# Wake phrase builder
+# ---------------------------------------------------------------------------
+
+def build_wake_phrases(assistant_name: str, prefix: str = None) -> list:
+    """Build the list of wake phrases Vosk listens for.
+
+    Default prefixes are 'hey', 'ok', and 'okay'.  A user-configured prefix
+    replaces all three when set.
+    """
+    name = assistant_name.lower().strip()
+    prefixes = [prefix.lower().strip()] if prefix else ["hey", "ok", "okay"]
+    phrases = []
+    for p in prefixes:
+        phrases.append(f"{p} {name}")
+        phrases.append(f"{p}, {name}")
+    return phrases
+
+
+# ---------------------------------------------------------------------------
+# Always-on background listener (Stage 1: Vosk wake, Stage 2: Whisper transcribe)
 # ---------------------------------------------------------------------------
 
 class BackgroundListener:
     """
-    Monitors audio continuously for a wake phrase.
+    Two-stage STT listener.
 
-    Phase 1 (idle):
-      Accumulates IDLE_ACCUM seconds of audio.  If RMS > ENERGY_FLOOR the
-      chunk is transcribed; if the wake phrase is found, switch to active.
+    Stage 1 — Vosk (always running, tiny footprint):
+      Feeds audio through a constrained grammar of wake phrases only.
+      On detection, mutes itself and signals Stage 2 to begin.
 
-    Phase 2 (active):
-      Records everything.  Once SILENCE_NEEDED consecutive seconds of RMS <
-      ENERGY_FLOOR are seen, transcribes the full buffer, strips the wake
-      phrase, and fires on_transcript(text).  Returns to idle.
+    Stage 2 — faster-whisper (triggered on demand):
+      Records until SILENCE_NEEDED seconds of RMS < ENERGY_FLOOR, then
+      transcribes, strips the wake phrase prefix, and fires on_transcript.
 
-    All callbacks are invoked from the background thread.  Callers that
-    update GTK widgets must wrap them in ``GLib.idle_add``.
+    Public interface:
+        on_transcript  callable(str) — fired with stripped transcript text
+        mute() / unmute()            — suppress detection during TTS playback
     """
 
-    BLOCK_SECS     = 0.5    # stream blocksize for responsive silence detection
-    IDLE_ACCUM     = 2.0    # seconds to buffer per wake-phrase check window
-    ENERGY_FLOOR   = 0.015  # RMS below this counts as silence
+    BLOCK_SIZE     = 8000   # samples per PortAudio block (0.5 s at 16 kHz)
+    ENERGY_FLOOR   = 0.015  # RMS silence threshold
     SILENCE_NEEDED = 2.5    # consecutive silence seconds to end an utterance
 
-    def __init__(self, wake_phrases, on_wake=None, on_transcript=None,
-                 on_idle=None, on_ready=None, device_name=None, model_size="tiny"):
-        self._wakes         = [w.lower() for w in wake_phrases]
-        self._on_wake       = on_wake
-        self._on_transcript = on_transcript
-        self._on_idle       = on_idle
-        self._on_ready      = on_ready
-        self._device        = resolve_device(device_name)
-        self._model_size    = model_size
-        self._stop_evt      = threading.Event()
-        self._state         = "loading"   # loading | idle | active
-        self._muted         = False       # True while TTS is playing
+    def __init__(self, on_transcript, assistant_name=None, wake_prefix=None):
+        import db as _db
+        self._on_transcript  = on_transcript
+        self._muted          = False
+        self._running        = False
+        self._state          = "idle"   # idle | active
+        self._active_buffer  = []
+        self._silence_count  = 0
 
-    @property
-    def state(self):
-        return self._state
+        mic_device         = _db.get("stt_microphone") or None
+        self._device       = resolve_device(mic_device)
+        self._model_size   = _db.get("stt_model") or "tiny"
+        vosk_path          = _db.get("vosk_model_path") or \
+                             "/home/aura/models/vosk/small-en-us"
+        name               = assistant_name or _db.get("assistant_name") or "aura"
+        prefix             = wake_prefix or _db.get("wake_prefix") or None
+
+        self._wake_phrases       = build_wake_phrases(name, prefix)
+        self._wake_phrases_lower = [p.lower() for p in self._wake_phrases]
+
+        # Initialise Vosk
+        import json as _json
+        from vosk import Model, KaldiRecognizer
+        self._vosk_model  = Model(vosk_path)
+        grammar           = _json.dumps(self._wake_phrases + ["[unk]"])
+        self._recogniser  = KaldiRecognizer(self._vosk_model, _SAMPLE_RATE, grammar)
+
+        # Pre-load Whisper so the first transcription has no latency spike
+        _load_model(self._model_size)
+
+    # --- Public interface ---
 
     def start(self):
-        self._stop_evt.clear()
-        self._state = "loading"
-        threading.Thread(target=self._run, daemon=True, name="aura-stt-bg").start()
+        self._running = True
+        threading.Thread(
+            target=self._listen_loop, daemon=True, name="aura-stt-vosk"
+        ).start()
 
     def stop(self):
-        self._stop_evt.set()
+        self._running = False
 
     def mute(self):
-        """Suppress wake detection (call when TTS starts)."""
+        """Suppress wake detection — call before TTS playback."""
         self._muted = True
+        self._state = "idle"
+        self._active_buffer.clear()
+        self._silence_count = 0
 
     def unmute(self):
-        """Re-enable wake detection (call when TTS ends)."""
+        """Resume wake detection — call after TTS playback."""
         self._muted = False
-        self._state = "idle"   # discard any active buffer captured during TTS
 
-    def _run(self):
+    # --- Audio callback (PortAudio thread) ---
+
+    def _audio_callback(self, indata, frames, time_info, status):
+        if not self._muted:
+            import queue as _q
+            try:
+                self._audio_queue.put_nowait(bytes(indata))
+            except _q.Full:
+                pass
+
+    # --- Main listener loop ---
+
+    def _listen_loop(self):
+        import queue as _q
         import numpy as np
-        import queue as _queue
-        import time
+        self._audio_queue = _q.Queue(maxsize=400)
 
-        # Pre-load the Whisper model before opening the mic stream so the
-        # first real transcription call has no latency spike.
+        print(f"[stt] Vosk wake listener starting — device={self._device} "
+              f"phrases={self._wake_phrases}", flush=True)
+
         try:
-            _load_model(self._model_size)
+            with sd.RawInputStream(
+                samplerate=_SAMPLE_RATE,
+                blocksize=self.BLOCK_SIZE,
+                device=self._device,
+                dtype="int16",
+                channels=1,
+                callback=self._audio_callback,
+            ):
+                print("[stt] mic stream open — Vosk listening for wake phrase", flush=True)
+                while self._running:
+                    try:
+                        data = self._audio_queue.get(timeout=0.5)
+                    except _q.Empty:
+                        continue
+
+                    if self._state == "idle":
+                        self._process_idle(data)
+                    else:
+                        self._process_active(data)
+
         except Exception as e:
-            print(f"[stt] model load failed: {e}", flush=True)
+            print(f"[stt] stream error: {e}", flush=True)
+
+    # --- Idle: Vosk wake detection ---
+
+    def _process_idle(self, data):
+        import json as _json
+        if self._recogniser.AcceptWaveform(data):
+            result = _json.loads(self._recogniser.Result())
+            text   = result.get("text", "").lower().strip()
+            if self._is_wake(text):
+                self._on_wake_detected()
+        else:
+            partial = _json.loads(self._recogniser.PartialResult())
+            text    = partial.get("partial", "").lower().strip()
+            if self._is_wake(text):
+                self._on_wake_detected()
+
+    def _is_wake(self, text: str) -> bool:
+        for phrase in self._wake_phrases_lower:
+            if phrase in text:
+                return True
+        return False
+
+    def _on_wake_detected(self):
+        self._state         = "active"
+        self._active_buffer = []
+        self._silence_count = 0
+        self._recogniser.Reset()
+        print("[stt] wake detected — recording", flush=True)
+
+    # --- Active: record until silence, then transcribe ---
+
+    def _process_active(self, data):
+        import numpy as np
+        self._active_buffer.append(data)
+
+        samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+        rms     = float(np.sqrt(np.mean(samples ** 2)))
+
+        blocks_for_silence = int(
+            self.SILENCE_NEEDED / (self.BLOCK_SIZE / _SAMPLE_RATE)
+        )
+
+        if rms < self.ENERGY_FLOOR:
+            self._silence_count += 1
+        else:
+            self._silence_count = 0
+
+        if self._silence_count >= blocks_for_silence:
+            self._transcribe_and_fire()
             self._state = "idle"
+
+    def _transcribe_and_fire(self):
+        import numpy as np
+        import db as _db
+        if not self._active_buffer:
             return
 
-        import collections as _collections
-
-        block_samples      = int(self.BLOCK_SECS * _SAMPLE_RATE)
-        idle_blocks_needed = max(1, int(self.IDLE_ACCUM / self.BLOCK_SECS))
-        # How many new blocks before re-running idle detection (50% overlap).
-        slide_blocks       = max(1, idle_blocks_needed // 2)
-
-        # Whisper initial prompt: hearing the assistant name primes the model
-        # to transcribe it correctly.
-        _name = self._wakes[0].capitalize() if self._wakes else "Aura"
-        _wake_prompt = f"Hey {_name},"
-
-        # Callback puts audio into a bounded queue; the main loop drains it.
-        # This prevents XRUNs — audio is never dropped while Whisper is busy.
-        audio_q = _queue.Queue(maxsize=200)   # ~100 s of headroom
-
-        def _audio_cb(indata, frames, time_info, status):
-            try:
-                audio_q.put_nowait(indata.squeeze().copy())
-            except _queue.Full:
-                pass   # drop oldest-style: skip this block rather than block the audio thread
-
-        # Rolling window (deque) for idle detection — 50% overlap avoids
-        # wake words being split at window boundaries.
-        idle_ring      = _collections.deque(maxlen=idle_blocks_needed)
-        idle_new_count = 0    # new blocks since last idle transcription
-        active_buf     = []   # everything recorded during active phase
-        silence_t      = None # monotonic timestamp when silence began
-
-        print(f"[stt] opening mic device index {self._device} "
-              f"(wake: {self._wakes})", flush=True)
-
-        self._state = "idle"
-        if self._on_ready:
-            self._on_ready()
+        raw   = b"".join(self._active_buffer)
+        audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
 
         try:
-            with sd.InputStream(
-                samplerate=_SAMPLE_RATE,
-                channels=1,
-                dtype="float32",
-                device=self._device,
-                blocksize=block_samples,
-                callback=_audio_cb,
-            ) as stream:
-                print(f"[stt] mic stream open — listening", flush=True)
-                while not self._stop_evt.is_set():
-                    try:
-                        chunk = audio_q.get(timeout=0.5)
-                    except _queue.Empty:
-                        continue
-                    rms = float(np.sqrt(np.mean(chunk ** 2)))
-
-                    # ── Idle: sliding window wake-phrase check ──────────────
-                    if self._state == "idle":
-                        idle_ring.append(chunk)
-                        idle_new_count += 1
-
-                        if self._muted:
-                            continue
-
-                        if (len(idle_ring) >= idle_blocks_needed
-                                and idle_new_count >= slide_blocks):
-                            idle_new_count = 0
-                            window = np.concatenate(idle_ring)
-                            w_rms  = float(np.sqrt(np.mean(window ** 2)))
-                            if w_rms > self.ENERGY_FLOOR:
-                                try:
-                                    text, _ = transcribe(window,
-                                                         model_size=self._model_size,
-                                                         language="en",
-                                                         initial_prompt=_wake_prompt)
-                                except Exception as e:
-                                    print(f"[stt] transcribe error: {e}", flush=True)
-                                    text = ""
-                                print(f"[stt] idle rms={w_rms:.4f} heard: {text!r}",
-                                      flush=True)
-                                if _contains_wake(text, self._wakes):
-                                    print("[stt] wake phrase detected → active",
-                                          flush=True)
-                                    self._state = "active"
-                                    active_buf  = list(idle_ring)
-                                    idle_ring.clear()
-                                    idle_new_count = 0
-                                    # Drain any audio queued during inference so
-                                    # it's included in the utterance buffer.
-                                    while True:
-                                        try:
-                                            active_buf.append(audio_q.get_nowait())
-                                        except _queue.Empty:
-                                            break
-                                    silence_t = None
-                                    if self._on_wake:
-                                        self._on_wake()
-                            else:
-                                print(f"[stt] idle rms={w_rms:.4f} (below floor, skipped)",
-                                      flush=True)
-
-                    # ── Active: record until SILENCE_NEEDED of quiet ────────
-                    else:
-                        active_buf.append(chunk)
-                        if rms < self.ENERGY_FLOOR:
-                            if silence_t is None:
-                                silence_t = time.monotonic()
-                            elif time.monotonic() - silence_t >= self.SILENCE_NEEDED:
-                                # Enough silence — transcribe and send
-                                full       = np.concatenate(active_buf)
-                                active_buf = []
-                                silence_t  = None
-                                self._state = "idle"
-                                if self._on_idle:
-                                    self._on_idle()
-                                try:
-                                    text, _ = transcribe(full,
-                                                         model_size=self._model_size,
-                                                         language="en")
-                                    text = _strip_wake(text, self._wakes)
-                                except Exception as e:
-                                    print(f"[stt] active transcribe error: {e}",
-                                          flush=True)
-                                    text = ""
-                                print(f"[stt] sending transcript: {text!r}", flush=True)
-                                if text.strip() and self._on_transcript:
-                                    self._on_transcript(text.strip())
-                        else:
-                            silence_t = None   # speech detected — reset timer
-
+            name = _db.get("assistant_name") or "aura"
+            text, _ = transcribe(
+                audio,
+                model_size=self._model_size,
+                language="en",
+                initial_prompt=f"Hey {name},",
+                vad_filter=True,
+            )
+            if not text:
+                return
+            text = _strip_wake(text, self._wake_phrases_lower)
+            if text:
+                print(f"[stt] transcript: {text!r}", flush=True)
+                self._on_transcript(text)
         except Exception as e:
-            print(f"[stt] BackgroundListener error: {e}", flush=True)
-
-        self._state = "idle"
-        if self._on_idle:
-            self._on_idle()
+            print(f"[stt] transcription error: {e}", flush=True)
+        finally:
+            self._active_buffer = []
+            self._silence_count = 0
 
 
 # ---------------------------------------------------------------------------
