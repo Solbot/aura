@@ -695,8 +695,9 @@ class AuraWindow(Gtk.ApplicationWindow):
         # Mic device preference (populated via backend device_query after socket connect)
         self._mic_options     = [("Default", "")]  # [(display_label, full_device_name)]
         self._mic_dropdown    = None
-        self._mic_header_box  = None   # container for all header mic widgets
+        self._mic_select_box  = None   # dropdown + separator, shown only when > 1 device
         self._stt_icon_lbl    = None   # 🎤 label — CSS class changes with state
+        self._stt_state_lbl   = None   # "loading…" / "● listening" — hidden when idle
         self._mic_populating  = False  # suppress notify::selected during programmatic set
         self._privacy_btn     = None
         self._privacy_mode    = (self._db_get("privacy_mode") or "0") == "1"
@@ -773,27 +774,33 @@ class AuraWindow(Gtk.ApplicationWindow):
         spacer.set_hexpand(True)
         bar.append(spacer)
 
-        # Mic device preference selector — populated via backend device_query on connect
-        self._mic_header_box = Gtk.Box(
-            orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        self._mic_header_box.set_visible(False)  # hidden until device list arrives
-
+        # STT icon — always visible, CSS class reflects state (listening / privacy)
         self._stt_icon_lbl = Gtk.Label(label="🎤")
         self._stt_icon_lbl.add_css_class("stt-icon")
-        self._mic_header_box.append(self._stt_icon_lbl)
+        bar.append(self._stt_icon_lbl)
+
+        # State text — hidden when idle; shows "loading…" / "● listening"
+        self._stt_state_lbl = Gtk.Label(label="loading…")
+        self._stt_state_lbl.add_css_class("stt-loading")
+        self._stt_state_lbl.set_visible(False)
+        bar.append(self._stt_state_lbl)
+
+        # Mic selector — shown only when backend reports > 1 input device
+        self._mic_select_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        self._mic_select_box.set_visible(False)
+
+        sep_mic = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
+        sep_mic.set_margin_start(6)
+        sep_mic.set_margin_end(6)
+        self._mic_select_box.append(sep_mic)
 
         self._mic_dropdown = Gtk.DropDown.new_from_strings(["Default"])
         self._mic_dropdown.set_hexpand(False)
         self._mic_dropdown.add_css_class("mic-selector")
         self._mic_dropdown.connect("notify::selected", self._on_mic_selected)
-        self._mic_header_box.append(self._mic_dropdown)
+        self._mic_select_box.append(self._mic_dropdown)
 
-        sep_mic = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
-        sep_mic.set_margin_start(6)
-        sep_mic.set_margin_end(6)
-        self._mic_header_box.append(sep_mic)
-
-        bar.append(self._mic_header_box)
+        bar.append(self._mic_select_box)
 
         self._conn_lbl = Gtk.Label(label="Connecting...")
         self._conn_lbl.add_css_class("connecting")
@@ -960,8 +967,9 @@ class AuraWindow(Gtk.ApplicationWindow):
                 break
         self._mic_populating = False
 
+        # Show the selector only when there is a real choice to make
         if len(options) > 1:
-            self._mic_header_box.set_visible(True)
+            self._mic_select_box.set_visible(True)
 
     def _on_mic_selected(self, dropdown, _pspec):
         """Save chosen device to config (backend reads it on restart)."""
@@ -982,6 +990,26 @@ class AuraWindow(Gtk.ApplicationWindow):
                 self._stt_icon_lbl.add_css_class("privacy")
             else:
                 self._stt_icon_lbl.remove_css_class("privacy")
+
+    def _set_stt_state(self, state):
+        """Update the 🎤 icon and state label. state ∈ {loading, listening, idle}."""
+        if not self._stt_icon_lbl or not self._stt_state_lbl:
+            return
+        if state == "loading":
+            self._stt_icon_lbl.remove_css_class("listening")
+            self._stt_state_lbl.set_text("loading…")
+            self._stt_state_lbl.remove_css_class("stt-state")
+            self._stt_state_lbl.add_css_class("stt-loading")
+            self._stt_state_lbl.set_visible(True)
+        elif state == "listening":
+            self._stt_icon_lbl.add_css_class("listening")
+            self._stt_state_lbl.set_text("● listening")
+            self._stt_state_lbl.remove_css_class("stt-loading")
+            self._stt_state_lbl.add_css_class("stt-state")
+            self._stt_state_lbl.set_visible(True)
+        else:  # idle
+            self._stt_icon_lbl.remove_css_class("listening")
+            self._stt_state_lbl.set_visible(False)
 
     # --------------------------------------------------------------- Chat --
 
@@ -1060,6 +1088,8 @@ class AuraWindow(Gtk.ApplicationWindow):
         elif t == "device_list":
             if msg.get("request_id") == "mic_list":
                 self._populate_mic_list(msg.get("devices", []))
+        elif t == "stt_state":
+            self._set_stt_state(msg.get("state", "idle"))
         elif t == "tts_start":
             pass   # mute/unmute handled by backend
         elif t == "tts_end":

@@ -177,9 +177,12 @@ class BackgroundListener:
     ENERGY_FLOOR   = 0.015  # RMS silence threshold
     SILENCE_NEEDED = 2.5    # consecutive silence seconds to end an utterance
 
-    def __init__(self, on_transcript, assistant_name=None, wake_prefix=None):
+    def __init__(self, on_transcript, assistant_name=None, wake_prefix=None,
+                 on_wake=None, on_idle=None):
         import db as _db
         self._on_transcript  = on_transcript
+        self._on_wake        = on_wake   # called when wake phrase detected
+        self._on_idle        = on_idle   # called when utterance transcribed and state returns idle
         self._muted          = False
         self._running        = False
         self._state          = "idle"   # idle | active
@@ -189,8 +192,8 @@ class BackgroundListener:
         mic_device         = _db.get("stt_microphone") or None
         self._device       = resolve_device(mic_device)
         self._model_size   = _db.get("stt_model") or "tiny"
-        vosk_path          = _db.get("vosk_model_path") or \
-                             "/home/aura/models/vosk/small-en-us"
+        vosk_path          = os.path.expanduser(
+                             _db.get("vosk_model_path") or "~/models/vosk/small-en-us")
         name               = assistant_name or _db.get("assistant_name") or "aura"
         prefix             = wake_prefix or _db.get("wake_prefix") or None
 
@@ -300,6 +303,8 @@ class BackgroundListener:
         self._silence_count = 0
         self._recogniser.Reset()
         print("[stt] wake detected — recording", flush=True)
+        if self._on_wake:
+            self._on_wake()
 
     # --- Active: record until silence, then transcribe ---
 
@@ -322,6 +327,8 @@ class BackgroundListener:
         if self._silence_count >= blocks_for_silence:
             self._transcribe_and_fire()
             self._state = "idle"
+            if self._on_idle:
+                self._on_idle()
 
     def _transcribe_and_fire(self):
         import numpy as np

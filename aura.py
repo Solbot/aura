@@ -8,6 +8,7 @@ import db
 import csam
 import tools
 import stt
+import llm_server
 import first_boot
 import awareness
 import memory
@@ -79,16 +80,19 @@ def speak(text):
         _listener.unmute()
     aura_socket.send({"type": "tts_end"})
 
-# --- Start IPC socket server (must be up before first boot so the UI can connect) ---
+# --- Start IPC socket server (up before everything else so the UI can show progress) ---
 aura_socket.start()
 
-# --- First boot ---
-if db.is_first_boot():
-    first_boot.run(speak)
-    voice, syn_config = load_voice()
-
-# --- Start background awareness thread ---
-awareness.start()
+# --- Start local LLM server ---
+aura_socket.send_system_message("Starting local LLM server...", level="info")
+_llm_ready = llm_server.start()
+if _llm_ready:
+    aura_socket.send_system_message("Local LLM server ready.", level="info")
+elif db.get("llama_model_path"):
+    aura_socket.send_system_message(
+        "Local LLM server failed to start. Will use remote endpoint if configured.",
+        level="warning",
+    )
 
 # --- Start background STT listener ---
 def _start_stt():
@@ -106,11 +110,21 @@ def _start_stt():
         on_transcript=lambda t: aura_socket.incoming_queue.put(
             {"type": "chat_input", "text": t, "id": None}
         ) if t else None,
+        on_wake=lambda: aura_socket.send({"type": "stt_state", "state": "listening"}),
+        on_idle=lambda: aura_socket.send({"type": "stt_state", "state": "idle"}),
     )
     _listener.start()
     print("[stt] BackgroundListener started in backend", flush=True)
 
 _start_stt()
+
+# --- First boot ---
+if db.is_first_boot():
+    first_boot.run(speak)
+    voice, syn_config = load_voice()
+
+# --- Start background awareness thread ---
+awareness.start()
 
 # --- Build system prompt ---
 def _web_search_rules():
@@ -193,74 +207,13 @@ def build_system_prompt():
     )
 
 # --- Tiered endpoint selection ---
-# Priority: home PC → remote API → local Pi fallback
-# Probe result cached 60s; cache invalidated on connection error.
-
-_LOCAL_ENDPOINT    = "http://localhost:8080/v1/chat/completions"
-_endpoint_cache    = {"url": None, "expires": 0.0}
-_endpoint_lock     = threading.Lock()
-_last_endpoint_url = None   # tracks last logged endpoint for change detection
-
-
-def _probe_health(base_url: str, timeout: float = 2.0) -> bool:
-    """GET <base>/health and return True if the server responds with HTTP < 500."""
-    health_url = base_url.rstrip("/") + "/health"
-    try:
-        r = requests.get(health_url, timeout=timeout)
-        return r.status_code < 500
-    except Exception:
-        return False
-
+import llm_endpoint as _ep
 
 def get_active_endpoint(invalidate: bool = False) -> str:
-    """
-    Return the best available LLM endpoint, probing in priority order:
-
-      1. home_pc_endpoint  (db config) — probed via /health, 2s timeout
-      2. remote_api_endpoint (db config) — assumed available if set (cloud API)
-      3. local Pi llama-server          — always the final fallback
-
-    Result cached for 60 seconds. Pass invalidate=True to force a fresh probe
-    (called automatically after a connection error).
-    """
-    global _last_endpoint_url
-
-    with _endpoint_lock:
-        now = time.monotonic()
-        if not invalidate and _endpoint_cache["url"] and now < _endpoint_cache["expires"]:
-            return _endpoint_cache["url"]
-
-        home_pc = db.get("home_pc_endpoint") or ""
-        remote  = db.get("remote_api_endpoint") or ""
-
-        chosen_url   = _LOCAL_ENDPOINT
-        chosen_label = "local Pi"
-
-        # Tier 1 — Home PC (probe /health)
-        if home_pc:
-            base = home_pc.replace("/v1/chat/completions", "").rstrip("/")
-            if _probe_health(base, timeout=2.0):
-                chosen_url   = home_pc
-                chosen_label = "home PC"
-
-        # Tier 2 — Remote API (assume available; cloud APIs rarely expose /health)
-        if chosen_url == _LOCAL_ENDPOINT and remote:
-            chosen_url   = remote
-            chosen_label = "remote API"
-
-        # Cache for 60 seconds
-        _endpoint_cache["url"]     = chosen_url
-        _endpoint_cache["expires"] = now + 60.0
-
-        # Notify the UI when the active tier changes
-        if chosen_url != _last_endpoint_url:
-            _last_endpoint_url = chosen_url
-            aura_socket.send_system_message(
-                f"LLM tier: {chosen_label} ({chosen_url})",
-                level="info",
-            )
-
-        return chosen_url
+    return _ep.get_active_endpoint(
+        invalidate=invalidate,
+        notify_fn=lambda msg: aura_socket.send_system_message(msg, level="info"),
+    )
 
 
 ASSISTANT_NAME = db.get('assistant_name')
@@ -575,6 +528,7 @@ while True:
     if msg_type == "shutdown":
         aura_socket.send_system_message("Aura shutting down.", level="info")
         awareness.stop()
+        llm_server.stop()
         aura_socket.stop()
         break
 
