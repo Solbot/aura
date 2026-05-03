@@ -13,4 +13,5 @@ print(sites[0] if sites else '')
 [ -n "$VENV_SITE" ] && export PYTHONPATH="$VENV_SITE"
 
 export PYTHONUNBUFFERED=1
+export GTK_A11Y=none
 exec python3 "${AURA_DIR}/aura_gtk.py"
