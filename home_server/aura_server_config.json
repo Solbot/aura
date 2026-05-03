@@ -1,0 +1,16 @@
+{
+    "llama_server_bin": "llama-server",
+    "model_path": "",
+    "model_url": "",
+    "hf_token": "",
+    "host": "0.0.0.0",
+    "port": 8081,
+    "llama_server_port": 8080,
+    "context_size": 4096,
+    "gpu_layers": -1,
+    "threads": -1,
+    "log_file": "aura_server.log",
+    "auto_restart": true,
+    "restart_delay_seconds": 5,
+    "model_tier": "home"
+}
