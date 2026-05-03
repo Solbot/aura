@@ -295,6 +295,21 @@ The mic dropdown uses `Gtk.DropDown.new_from_strings()` (not `Gtk.DropDown(model
 
 The UI runs under system `python3` (which owns `gi`/GTK) but needs venv packages for STT. `launch_ui.sh` sets `PYTHONPATH` to the venv site-packages before exec. `aura_gtk.py` also injects the same path at the top of the file as a fallback for manual invocation.
 
+## System Package Dependencies
+
+Required system packages (must be installed once on a fresh OS, not in the venv):
+
+```bash
+# GTK4 Python introspection bindings — UI won't start without this
+sudo apt-get install -y gir1.2-gtk-4.0
+
+# PortAudio — required by sounddevice (STT/audio device enumeration)
+sudo apt-get install -y libportaudio2
+```
+
+`gir1.2-gtk-4.0` is the most critical: its absence causes `launch_ui.sh` to fail silently
+at session start (no window, no error visible to the user).
+
 ## Running
 
 ```bash
