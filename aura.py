@@ -106,10 +106,13 @@ def _start_stt():
     if db.get('privacy_mode') == '1':
         print("[stt] privacy mode active — skipping", flush=True)
         return
+    def _on_stt_transcript(t):
+        if t:
+            aura_socket.send({"type": "stt_transcript", "text": t})
+            aura_socket.incoming_queue.put({"type": "chat_input", "text": t, "id": None})
+
     _listener = stt.BackgroundListener(
-        on_transcript=lambda t: aura_socket.incoming_queue.put(
-            {"type": "chat_input", "text": t, "id": None}
-        ) if t else None,
+        on_transcript=_on_stt_transcript,
         on_wake=lambda: aura_socket.send({"type": "stt_state", "state": "listening"}),
         on_idle=lambda: aura_socket.send({"type": "stt_state", "state": "idle"}),
     )
@@ -204,6 +207,12 @@ def build_system_prompt():
         "If results are returned, incorporate them naturally — cite the source document name.\n"
         "- When the user pastes a URL in their message, automatically call fetch_page to "
         "read and interpret the page content before responding.\n"
+        "- EXPRESSIONS: You have a character panel that displays Fluent Emoji. Use "
+        "express_emotion to show a visual reaction when you genuinely feel something — "
+        "amused, surprised, confused, excited, or even just thematically appropriate "
+        "(a 🎸 when talking about music, a 🦊 because foxes came up). "
+        "Pass the emoji character directly (e.g. '😂', '🦊', '🎉'). "
+        "Never describe the emotion in words AND show it — pick one or the other.\n"
     )
 
 # --- Tiered endpoint selection ---
@@ -259,7 +268,8 @@ def llm_call(messages, use_tools=True):
 
     endpoint = get_active_endpoint()
     try:
-        r    = requests.post(endpoint, json=payload, timeout=(10, 300))
+        read_timeout = int(db.get("llm_read_timeout") or 600)
+        r    = requests.post(endpoint, json=payload, timeout=(10, read_timeout))
         data = r.json()
         if "choices" not in data:
             aura_socket.send_system_message(f"LLM error: {str(data)[:200]}", level="error")
@@ -285,7 +295,7 @@ def llm_call(messages, use_tools=True):
             aura_socket.send_system_message("All LLM tiers unreachable.", level="error")
             return _error_reply("I'm having trouble connecting right now.")
         try:
-            r    = requests.post(fallback, json=payload, timeout=(10, 300))
+            r    = requests.post(fallback, json=payload, timeout=(10, read_timeout))
             data = r.json()
             if "choices" not in data:
                 aura_socket.send_system_message(f"LLM error: {str(data)[:200]}", level="error")
@@ -523,6 +533,17 @@ while True:
 
     if msg_type == "process_knowledge":
         _run_knowledge_watch()
+        continue
+
+    if msg_type == "set_privacy_mode":
+        _enabled = socket_msg.get("enabled", False)
+        if _enabled:
+            if _listener:
+                _listener.stop()
+                _listener = None
+        else:
+            if not _listener:
+                _start_stt()
         continue
 
     if msg_type == "shutdown":
