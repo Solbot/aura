@@ -153,10 +153,13 @@ Treat it as a stable API. Do not make breaking changes without updating this doc
 | Type | Fields | Effect |
 |------|--------|--------|
 | `chat_response` | `text`, `id` | Append AURA message |
+| `stt_transcript` | `text` | Display user's spoken words in chat box |
 | `system_message` | `text`, `level` | Status notification (info/warning/error) |
 | `status_update` | `key`, `value` | Update header widget (cpu_temp, memory, battery, etc) |
 | `tts_start` | — | TTS beginning — mute STT if UI manages audio |
 | `tts_end` | — | TTS complete — unmute STT |
+| `set_aura_state` | `state` | Override character emoji state (e.g. `sleeping` during dream) |
+| `set_expression` | `emotion` | Show a transient emotional expression; held during next TTS then reverts |
 | `ui_command` | `tool`, `args` | Execute a UI-side action |
 | `ui_query` | `filter`, `request_id` | Request tile/device state from UI |
 | `device_list` | `device_type`, `devices`, `request_id` | Response to device enumeration request |
@@ -165,6 +168,7 @@ Treat it as a stable API. Do not make breaking changes without updating this doc
 | Type | Fields | Effect |
 |------|--------|--------|
 | `chat_input` | `text`, `id` | User message |
+| `set_privacy_mode` | `enabled` | Start (`false`) or stop (`true`) STT listener at runtime |
 | `ping` | — | Keepalive |
 | `ui_response` | `request_id`, data | Response to ui_query |
 | `shutdown` | — | Graceful shutdown request |
@@ -281,6 +285,13 @@ Connects to `/tmp/aura.sock` as a client. All socket messages are JSON lines.
 | `tts_end` | — | Unmute STT; discard active buffer |
 | `ui_command` | `tool`, `args` | Execute a UI tool |
 | `ui_query` | `filter`, `request_id` | Query tile state |
+| `set_expression` | `emoji` | Show a transient Fluent Emoji expression; held during next TTS then reverts to idle |
+
+**Emoji character panel:**
+
+The left panel displays the current AURA state as a Fluent Emoji 3D PNG (`assets/emoji/`). States are defined in `AURA_STATES` (module-level dict); dynamic expressions from `express_emotion` tool calls are registered at runtime using the emoji character itself as the key.
+
+PNG images are loaded via `Gdk.Texture.new_from_filename()` + `Gtk.Picture.set_paintable()` — the GTK 4.12+ API. Do **not** use the deprecated `GdkPixbuf` + `set_pixbuf()` path; `GdkPixbuf` is not imported. `_STATIC_STATES` is a frozen snapshot of the built-in operational states; dynamic emoji states use the generic `aura-state-expression` CSS animation class instead of a named one.
 
 Layout (top to bottom):
 1. **Header bar** — assistant name · `🎤` mic selector · connection status · clock · CPU temp · RAM
